@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: server-side-project/package-lock.json
+      - working-directory: server-side-project
+        run: npm ci
+      - working-directory: server-side-project
+        run: npm audit
+      - working-directory: server-side-project
+        run: npm run lint
+      - working-directory: server-side-project
+        run: npm test
+        env:
+          TEST_MONGODB_URI: mongodb://localhost:27017/stock_review_test
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: "Stock Review/uni-preset-vue-vite/uni-preset-vue-vite/package-lock.json"
+      - working-directory: "Stock Review/uni-preset-vue-vite/uni-preset-vue-vite"
+        run: npm ci
+      - working-directory: "Stock Review/uni-preset-vue-vite/uni-preset-vue-vite"
+        run: npm run test
+      - working-directory: "Stock Review/uni-preset-vue-vite/uni-preset-vue-vite"
+        run: npm run build:h5

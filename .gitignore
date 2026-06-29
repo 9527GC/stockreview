@@ -1,0 +1,37 @@
+# Claude memory / personal data
+.claude/
+cookies.txt
+deploy-key.pem
+
+# Logs
+*.log
+logs/
+
+# Dependency directories
+node_modules/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Build outputs
+ dist/
+build/
+.next/
+out/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+
+# Git backups
+.git.bak/

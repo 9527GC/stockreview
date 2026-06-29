@@ -1,0 +1,13 @@
+<svg width="200" height="200" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Red Candle (Up) -->
+  <line x1="42" y1="28" x2="42" y2="62" stroke="#EE0A24" stroke-width="4" stroke-linecap="round"/>
+  <rect x="38" y="35" width="8" height="20" rx="2" fill="#EE0A24"/>
+  
+  <!-- Green Candle (Down) -->
+  <line x1="58" y1="38" x2="58" y2="72" stroke="#07C160" stroke-width="4" stroke-linecap="round"/>
+  <rect x="54" y="45" width="8" height="20" rx="2" fill="#07C160"/>
+  
+  <!-- Cycle Arrow (Blue) -->
+  <path d="M85 50 A 35 35 0 1 1 50 15" stroke="#1989FA" stroke-width="8" stroke-linecap="round" fill="none"/>
+  <path d="M50 15 L 38 5 M 50 15 L 38 25" stroke="#1989FA" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

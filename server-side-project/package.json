@@ -1,0 +1,38 @@
+{
+  "name": "project",
+  "version": "1.0.0",
+  "description": "This is a simple Node.js server application example that demonstrates basic HTTP server functionality.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "start:prod": "NODE_ENV=production node src/index.js",
+    "dev": "node src/index.js",
+    "snapshot:profit-history": "node scripts/snapshot_profit_history.js",
+    "lint": "eslint src/",
+    "test": "jest --runInBand --forceExit",
+    "audit": "npm audit"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.5.2",
+    "iconv-lite": "^0.7.2",
+    "jsonwebtoken": "^9.0.3",
+    "moment": "^2.30.1",
+    "mongoose": "^8.23.0",
+    "node-cron": "^4.5.0",
+    "sanitize-html": "^2.17.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.6.0",
+    "globals": "^17.7.0",
+    "jest": "^30.4.2",
+    "supertest": "^7.2.2"
+  }
+}
