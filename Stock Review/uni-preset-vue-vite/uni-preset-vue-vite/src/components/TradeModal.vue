@@ -1,7 +1,7 @@
 <template>
   <a-modal
     :open="open"
-    title="添加交易"
+    :title="modalTitle"
     @ok="handleSubmit"
     @cancel="handleCancel"
     width="600px"
@@ -23,6 +23,7 @@
               :filter-option="false"
               @search="handleSearch"
               style="width: 100%"
+              :disabled="isEditMode"
             >
               <template #option="{ value, label, market }">
                 <div style="display: flex; justify-content: space-between;">
@@ -45,7 +46,7 @@
       </a-row>
 
       <a-form-item label="操作方向">
-        <a-radio-group v-model:value="formState.type" button-style="solid">
+        <a-radio-group v-model:value="formState.type" button-style="solid" :disabled="isEditMode">
           <a-radio-button value="BUY">买入</a-radio-button>
           <a-radio-button value="SELL">卖出</a-radio-button>
         </a-radio-group>
@@ -90,7 +91,7 @@
       </a-row>
 
       <a-form-item label="交易时间">
-        <a-date-picker v-model:value="formState.date" show-time style="width: 100%" />
+        <a-date-picker v-model:value="formState.date" show-time style="width: 100%" :disabled="isEditMode" />
       </a-form-item>
 
       <a-divider style="margin: 24px 0 16px 0;">交易当时</a-divider>
@@ -246,12 +247,23 @@ const props = defineProps({
   initialData: {
     type: Object,
     default: () => ({})
+  },
+  mode: {
+    type: String,
+    default: 'add' // 'add' | 'edit'
+  },
+  trade: {
+    type: Object,
+    default: null
   }
 });
 
 const emit = defineEmits(['update:open', 'success']);
 
 const store = useTradeStore();
+
+const isEditMode = computed(() => props.mode === 'edit');
+const modalTitle = computed(() => isEditMode.value ? '编辑交易' : '添加交易');
 
 const formState = reactive({
   symbol: '',
@@ -271,6 +283,22 @@ const currencyCode = computed(() => {
   const map = { HK: 'HKD', US: 'USD', CN: 'CNY' };
   return map[formState.market] || 'CNY';
 });
+
+const inferMarketFromSymbol = (symbol, market) => {
+  const mkt = String(market || '').toUpperCase();
+  if (mkt === 'SH' || mkt === 'SZ' || mkt === 'BJ' || mkt === 'CN') return 'CN';
+  if (mkt === 'HK') return 'HK';
+  if (mkt === 'US') return 'US';
+
+  const sym = String(symbol || '').toUpperCase();
+  if (sym.endsWith('.SH') || sym.endsWith('.SZ') || sym.endsWith('.BJ')) return 'CN';
+  if (sym.endsWith('.HK')) return 'HK';
+  if (sym.endsWith('.US')) return 'US';
+  if (/^\d{6}$/.test(sym)) return 'CN';
+  if (/^\d{5}$/.test(sym)) return 'HK';
+  if (/^[A-Z]{1,5}$/.test(sym)) return 'US';
+  return 'CN';
+};
 
 const feeLabel = computed(() => formState.feeMode === 'rate' ? '手续费率' : '手续费');
 
@@ -304,12 +332,45 @@ watch(() => props.open, (newVal) => {
     Object.keys(validationErrors).forEach(key => validationErrors[key] = '');
     resetMarketOverviewDisplay();
     resetMarketOverviewNotes();
-    if (props.initialData && props.initialData.symbol) {
+
+    if (isEditMode.value && props.trade) {
+      // 编辑模式：回灌交易数据
+      const t = props.trade;
+      formState.symbol = t.symbol || '';
+      formState.market = inferMarketFromSymbol(t.symbol, t.market);
+      formState.type = t.type || 'BUY';
+      formState.price = t.price ?? 0;
+      formState.quantity = t.quantity ?? 0;
+      formState.date = t.date ? dayjs(t.date) : dayjs();
+      formState.logic = t.logic || '';
+      formState.mood = t.mood || 'NEUTRAL';
+      marketOverview.news = t.news || '';
+      marketOverview.images = t.marketOverview?.images || [];
+
+      // 费用回灌
+      if (t.feeMode === 'rate' && t.feeRate != null) {
+        formState.feeMode = 'rate';
+        formState.feeRate = t.feeRate;
+        formState.feeAmount = 0;
+      } else {
+        formState.feeMode = 'amount';
+        formState.feeAmount = t.commission || 0;
+        formState.feeRate = 5;
+      }
+    } else if (props.initialData && props.initialData.symbol) {
       formState.symbol = props.initialData.symbol;
       formState.market = props.initialData.market || 'CN';
       formState.price = props.initialData.currentPrice || 0;
       formState.type = 'BUY';
       formState.date = dayjs();
+      formState.quantity = 100;
+      formState.mood = 'NEUTRAL';
+      formState.logic = '';
+      // 先恢复默认，再按当前市场加载最近一次手续费偏好
+      formState.feeMode = 'rate';
+      formState.feeRate = 5;
+      formState.feeAmount = 0;
+      loadCommissionPreference(formState.market);
     } else {
       // Default reset if no initialData
       formState.symbol = '';
@@ -320,12 +381,12 @@ watch(() => props.open, (newVal) => {
       formState.mood = 'NEUTRAL';
       formState.logic = '';
       formState.date = dayjs();
+      // 先恢复默认，再按当前市场加载最近一次手续费偏好
+      formState.feeMode = 'rate';
+      formState.feeRate = 5;
+      formState.feeAmount = 0;
+      loadCommissionPreference(formState.market);
     }
-    // 先恢复默认，再按当前市场加载最近一次手续费偏好
-    formState.feeMode = 'rate';
-    formState.feeRate = 5;
-    formState.feeAmount = 0;
-    loadCommissionPreference(formState.market);
   }
 });
 
@@ -753,6 +814,40 @@ const handleSubmit = () => {
   }
 
   loading.value = true;
+
+  if (isEditMode.value) {
+    // 编辑模式：只提交允许修改的字段
+    const tradeAmount = formState.price * formState.quantity;
+    const commission = formState.feeMode === 'rate'
+      ? (tradeAmount * (formState.feeRate || 0)) / 10000
+      : Number(formState.feeAmount || 0);
+
+    const updatePayload = {
+      price: formState.price,
+      quantity: formState.quantity,
+      feeMode: formState.feeMode,
+      feeRate: formState.feeMode === 'rate' ? formState.feeRate : null,
+      feeAmount: formState.feeMode === 'amount' ? formState.feeAmount : null,
+      commission,
+      news: marketOverview.news || '',
+      mood: formState.mood,
+      logic: formState.logic
+    };
+
+    store.updateTrade(props.trade.id, updatePayload).then(() => {
+      loading.value = false;
+      message.success('交易记录已更新');
+      emit('success');
+      emit('update:open', false);
+      resetMarketOverviewNotes();
+    }).catch((err) => {
+      loading.value = false;
+      message.error(err?.message || '更新失败，请稍后重试');
+    });
+    return;
+  }
+
+  // 添加模式：保持原有逻辑
   const matchedOption = allStockOptions.value.find(opt => opt.value === formState.symbol);
 
   // 组装当前交易时间点的大盘快照（不含 news，news 单独发送）

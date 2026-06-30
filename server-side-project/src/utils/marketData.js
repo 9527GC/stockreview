@@ -35,6 +35,24 @@ const isSinaCircuitOpen = () => {
   return true;
 };
 
+// 行情短期内存缓存，减少上游接口压力和本地限流命中
+const quoteCache = new Map();
+const QUOTE_CACHE_TTL_MS = 8 * 1000;
+
+const getCachedQuote = (formattedSymbol) => {
+  const entry = quoteCache.get(formattedSymbol);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > QUOTE_CACHE_TTL_MS) {
+    quoteCache.delete(formattedSymbol);
+    return null;
+  }
+  return entry.data;
+};
+
+const setCachedQuote = (formattedSymbol, data) => {
+  quoteCache.set(formattedSymbol, { ts: Date.now(), data });
+};
+
 const toFiniteOrNull = (value) => {
   if (value === null || value === undefined || value === '') return null;
   const n = Number(value);
@@ -867,7 +885,28 @@ const getQuotes = (symbols) => {
     }
 
     const formattedList = symbolList.map(formatSymbol);
-    const url = `${SINA_API_URL}${formattedList.join(',')}`;
+
+    // 先尝试读取短期缓存
+    const cachedResults = {};
+    const missingSymbols = [];
+    const missingFormatted = [];
+    symbolList.forEach((symbol, idx) => {
+      const formatted = formattedList[idx];
+      const cached = getCachedQuote(formatted);
+      if (cached) {
+        cachedResults[symbol] = cached;
+        cachedResults[formatted] = cached;
+      } else {
+        missingSymbols.push(symbol);
+        missingFormatted.push(formatted);
+      }
+    });
+
+    if (missingFormatted.length === 0) {
+      return resolve(cachedResults);
+    }
+
+    const url = `${SINA_API_URL}${missingFormatted.join(',')}`;
 
     const client = url.startsWith('https') ? https : http;
     const req = client.get(url, {
@@ -881,7 +920,7 @@ const getQuotes = (symbols) => {
           const buffer = Buffer.concat(chunks);
           const body = iconv.decode(buffer, 'gbk');
 
-          const results = {};
+          const results = { ...cachedResults };
           const lines = body.split('\n');
 
           lines.forEach(line => {
@@ -891,18 +930,18 @@ const getQuotes = (symbols) => {
               const dataStr = match[2];
               const quote = parseSinaData(code, dataStr);
               if (quote) {
+                setCachedQuote(code, quote);
                 results[code] = quote;
                 // 同时也以原始传入的 symbol 为 key 存一份，方便调用方查找
-                // 这是一个简单的映射尝试
-                const originalSymbol = symbolList.find(s => formatSymbol(s) === code);
+                const originalSymbol = missingSymbols.find(s => formatSymbol(s) === code);
                 if (originalSymbol) results[originalSymbol] = quote;
               }
             }
           });
 
           // 若返回为空，可能是接口限流或异常，记录熔断
-          if (Object.keys(results).length === 0 && symbolList.length > 0) {
-            console.warn('[MarketData] Sina returned empty results for:', formattedList.join(','));
+          if (Object.keys(results).length === 0 && missingFormatted.length > 0) {
+            console.warn('[MarketData] Sina returned empty results for:', missingFormatted.join(','));
             openSinaCircuit();
           }
 
@@ -910,7 +949,7 @@ const getQuotes = (symbols) => {
         } catch (error) {
           console.error('[MarketData] Parse error:', error);
           openSinaCircuit();
-          resolve({});
+          resolve({ ...cachedResults });
         }
       });
     });
@@ -918,14 +957,14 @@ const getQuotes = (symbols) => {
     req.on('error', (err) => {
       console.error('[MarketData] Fetch error:', err.message);
       openSinaCircuit();
-      resolve({});
+      resolve({ ...cachedResults });
     });
 
     req.setTimeout(10000, () => {
       req.destroy();
       console.error('[MarketData] Request timeout');
       openSinaCircuit();
-      resolve({});
+      resolve({ ...cachedResults });
     });
   });
 };

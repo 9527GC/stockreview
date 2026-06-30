@@ -43,6 +43,63 @@ const inferCurrencyFromSymbol = (symbol, market, fallbackCurrency) => {
   return fallbackCurrency || 'CNY';
 };
 
+/**
+ * 根据 feeMode 计算最终手续费
+ * @param {Object} params
+ * @param {number} params.price 成交价
+ * @param {number} params.quantity 数量
+ * @param {string|null} params.feeMode 'rate' | 'amount' | null
+ * @param {number} params.feeRate 费率，单位：‱
+ * @param {number} params.feeAmount 固定费用金额
+ * @param {number} params.commission 回退使用的手续费金额
+ */
+const calculateCommission = ({ price, quantity, feeMode, feeRate, feeAmount, commission }) => {
+  const mode = ['rate', 'amount'].includes(feeMode) ? feeMode : null;
+  const rate = Number(feeRate) || 0;
+  const amount = Number(feeAmount) || 0;
+  const tradeAmount = Number(price) * Number(quantity);
+
+  if (mode === 'rate') {
+    return tradeAmount * rate / 10000;
+  } else if (mode === 'amount') {
+    return amount;
+  }
+  return Number(commission) || 0;
+};
+
+/**
+ * 校验编辑某条交易的数量后，全账本是否会出现超卖
+ * @returns {Promise<{valid: boolean, message?: string}>}
+ */
+const validateTradeEditQuantity = async ({ userId, editedTradeId, updates }) => {
+  if (updates.quantity === undefined) return { valid: true };
+
+  const trades = await Trade.find({ userId }).sort({ date: 1 }).lean();
+  const holdings = new Map();
+
+  for (const t of trades) {
+    const isEditing = String(t._id) === String(editedTradeId);
+    const type = isEditing && updates.type ? String(updates.type).toUpperCase() : t.type;
+    const qty = isEditing && updates.quantity !== undefined ? Number(updates.quantity) : Number(t.quantity);
+
+    if (!Number.isFinite(qty) || qty <= 0) {
+      return { valid: false, message: '交易数量必须大于 0' };
+    }
+
+    if (type === 'BUY') {
+      holdings.set(t.symbol, (holdings.get(t.symbol) || 0) + qty);
+    } else if (type === 'SELL') {
+      const current = holdings.get(t.symbol) || 0;
+      if (qty > current) {
+        return { valid: false, message: `卖出数量超过持仓：${t.name || t.symbol} 在 ${t.date.toISOString()} 时最多可卖 ${current}` };
+      }
+      holdings.set(t.symbol, current - qty);
+    }
+  }
+
+  return { valid: true };
+};
+
 // 重新计算用户总资产（现金 + 持仓市值）
 const recalculateAssets = async (userId) => refreshAssetMarketValue(userId);
 
@@ -239,7 +296,13 @@ exports.getHoldings = async (req, res) => {
     ]);
     const cashCNY = asset?.cash || 0;
     const performanceBySymbol = buildTradePerformanceBySymbol({ trades: tradesAsc, rates: RATES });
-    
+
+    // 计算每只股票最近一次交易时间，用于前端默认排序
+    const lastTradeDateBySymbol = new Map();
+    (tradesAsc || []).forEach(t => {
+      lastTradeDateBySymbol.set(normalizeSymbol(t.symbol), t.date);
+    });
+
     // 获取实时行情
     const symbols = holdings.map(h => h.symbol);
     const quotes = await getQuotes(symbols);
@@ -320,7 +383,8 @@ exports.getHoldings = async (req, res) => {
         realizedProfit,
         cumulativeProfit,
         dailyProfit,
-        marketTag: h.marketTag
+        marketTag: h.marketTag,
+        lastTradeDate: lastTradeDateBySymbol.get(normalizeSymbol(h.symbol)) || null
       };
     });
 
@@ -357,10 +421,25 @@ exports.getReviews = async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize) || 20));
-    const { symbol, sort, date, include, type } = req.query;
+    const { symbol, sort, date, include, type, reviewStatus } = req.query;
     const query = { userId: req.user._id };
     if (symbol) query.symbol = symbol;
     if (type) query.type = String(type).trim().toUpperCase();
+
+    const normalizedReviewStatus = String(reviewStatus || '').trim().toLowerCase();
+    if (normalizedReviewStatus === 'reviewed') {
+      query.$or = [
+        { isSystemCompliant: { $nin: [null, ''] } },
+        { cognitiveBias: { $nin: [null, ''] } },
+        { improvementMeasures: { $nin: [null, ''] } }
+      ];
+    } else if (normalizedReviewStatus === 'pending') {
+      query.$and = [
+        { isSystemCompliant: { $in: [null, ''] } },
+        { cognitiveBias: { $in: [null, ''] } },
+        { improvementMeasures: { $in: [null, ''] } }
+      ];
+    }
 
     if (date) {
       const d = String(date).slice(0, 10);
@@ -592,15 +671,7 @@ exports.addTrade = async (req, res) => {
     // 根据 feeMode 计算最终手续费，优先信任 feeMode/feeRate/feeAmount，回退到 commission
     feeMode = ['rate', 'amount'].includes(feeMode) ? feeMode : null;
     feeRate = Number(feeRate) || 0;
-    feeAmount = Number(feeAmount) || 0;
-    const tradeAmount = price * quantity;
-    if (feeMode === 'rate') {
-      commission = tradeAmount * feeRate / 10000;
-    } else if (feeMode === 'amount') {
-      commission = feeAmount;
-    } else {
-      commission = Number(commission) || 0;
-    }
+    commission = calculateCommission({ price, quantity, feeMode, feeRate, feeAmount, commission });
     if (!Number.isFinite(commission) || commission < 0) {
       return res.status(400).json({ message: 'Commission must be non-negative' });
     }
@@ -783,79 +854,123 @@ exports.updateTrade = async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: 'Invalid trade id' });
     }
-    const updates = { ...req.body };
-    if (updates.mood === undefined || updates.mood === null || updates.mood === '') {
-      delete updates.mood;
-    } else {
-      updates.mood = String(updates.mood).trim().toUpperCase();
-    }
 
-    if (updates.news !== undefined) {
-      updates.news = updates.news === null ? null : sanitizeHtml(updates.news);
-    }
-
-    if (updates.marketOverview !== undefined && updates.marketOverview !== null && typeof updates.marketOverview !== 'object') {
-      return res.status(400).json({ message: 'Invalid marketOverview' });
-    }
-    if (updates.date !== undefined) {
-      updates.date = parseDateInOffset(updates.date, 480);
-      if (!(updates.date instanceof Date) || Number.isNaN(updates.date.getTime())) {
-        return res.status(400).json({ message: 'Invalid date' });
-      }
-    }
-    if (updates.symbol !== undefined) {
-      updates.symbol = normalizeSymbol(updates.symbol);
-    }
-    const shouldRefreshSnapshot = updates.refreshMarketSnapshot === true
-      || updates.date !== undefined
-      || updates.market !== undefined
-      || updates.symbol !== undefined;
-    delete updates.refreshMarketSnapshot;
-    delete updates.marketOverview;
-    delete updates.marketOverviewSnapshot;
-    delete updates.snapshotStatus;
-    delete updates.snapshotSource;
-    delete updates.snapshotTime;
     const trade = await Trade.findOne({ _id: id, userId: req.user._id });
-
     if (!trade) {
       return res.status(404).json({ message: '交易记录未找到' });
     }
 
-    // 根据 symbol/market 推断币种（必须在查询到 trade 之后）
-    if (updates.symbol !== undefined || updates.market !== undefined || updates.currency !== undefined) {
-      updates.currency = inferCurrencyFromSymbol(
-        updates.symbol ?? trade.symbol,
-        updates.market ?? trade.market,
-        updates.currency ?? trade.currency
-      );
+    const rawUpdates = { ...req.body };
+
+    // 1. 受保护字段：买卖方向、股票代码、市场、交易时间均不允许修改
+    const protectedFields = [
+      { key: 'type', label: '买卖方向' },
+      { key: 'symbol', label: '股票代码' },
+      { key: 'market', label: '市场' },
+      { key: 'date', label: '交易时间' }
+    ];
+
+    for (const { key, label } of protectedFields) {
+      if (rawUpdates[key] !== undefined) {
+        if (key === 'date') {
+          return res.status(400).json({ message: `不允许修改${label}` });
+        }
+        const newValue = key === 'symbol'
+          ? normalizeSymbol(rawUpdates[key])
+          : String(rawUpdates[key] || '').toUpperCase();
+        const oldValue = key === 'symbol'
+          ? normalizeSymbol(trade[key])
+          : String(trade[key] || '').toUpperCase();
+        if (newValue !== oldValue) {
+          return res.status(400).json({ message: `不允许修改${label}` });
+        }
+      }
     }
 
-    // 简单实现：仅更新交易记录，提示需手动调整持仓
-    // 复杂实现需要回滚旧交易对持仓的影响，再应用新交易（暂略，防止逻辑过于复杂出错）
-    Object.assign(trade, updates);
-    if (shouldRefreshSnapshot) {
-      const snapshotFields = await buildTradeMarketSnapshot({
-        symbol: trade.symbol,
-        market: trade.market,
-        date: trade.date
-      });
-      Object.assign(trade, snapshotFields);
+    // 2. 只允许修改白名单字段
+    const allowedFields = ['price', 'quantity', 'commission', 'feeMode', 'feeRate', 'feeAmount', 'news', 'mood', 'logic'];
+    const updates = {};
+    for (const key of allowedFields) {
+      if (rawUpdates[key] !== undefined) {
+        updates[key] = rawUpdates[key];
+      }
     }
+
+    // 3. 清洗字段
+    if (updates.mood !== undefined) {
+      updates.mood = String(updates.mood).trim().toUpperCase();
+    }
+    if (updates.news !== undefined) {
+      updates.news = updates.news === null ? null : sanitizeHtml(updates.news);
+    }
+
+    // 4. 数量基础校验
+    if (updates.quantity !== undefined) {
+      updates.quantity = Number(updates.quantity);
+      if (!Number.isFinite(updates.quantity) || updates.quantity <= 0) {
+        return res.status(400).json({ message: 'Quantity must be a positive number' });
+      }
+    }
+    if (updates.price !== undefined) {
+      updates.price = Number(updates.price);
+      if (!Number.isFinite(updates.price) || updates.price <= 0) {
+        return res.status(400).json({ message: 'Price must be a positive number' });
+      }
+    }
+
+    // 5. 重新计算手续费
+    const hasCommissionRelatedChange = [
+      'price', 'quantity', 'commission', 'feeMode', 'feeRate', 'feeAmount'
+    ].some(key => updates[key] !== undefined);
+
+    if (hasCommissionRelatedChange) {
+      const feeMode = ['rate', 'amount'].includes(updates.feeMode)
+        ? updates.feeMode
+        : (trade.feeMode || null);
+      const feeRate = updates.feeRate !== undefined ? Number(updates.feeRate) || 0 : (trade.feeRate || 0);
+      const feeAmount = updates.feeAmount !== undefined ? Number(updates.feeAmount) || 0 : (trade.commission || 0);
+
+      updates.commission = calculateCommission({
+        price: updates.price ?? trade.price,
+        quantity: updates.quantity ?? trade.quantity,
+        feeMode,
+        feeRate,
+        feeAmount,
+        commission: updates.commission ?? trade.commission
+      });
+
+      // 保存 feeMode/feeRate 便于下次编辑回灌
+      if (updates.feeMode !== undefined) updates.feeMode = feeMode;
+      if (updates.feeRate !== undefined) updates.feeRate = feeMode === 'rate' ? feeRate : null;
+    }
+
+    // 6. 数量修改时校验全账本是否出现超卖
+    if (updates.quantity !== undefined) {
+      const { valid, message: validateMsg } = await validateTradeEditQuantity({
+        userId: req.user._id,
+        editedTradeId: trade._id,
+        updates
+      });
+      if (!valid) {
+        return res.status(400).json({ message: validateMsg });
+      }
+    }
+
+    // 7. 应用更新并保存
+    Object.assign(trade, updates);
     if (!trade.mood) trade.mood = 'NEUTRAL';
     await trade.save();
 
+    // 8. 重建资产与回填收益
     await rebuildAssetFromLedger(req.user._id);
     await upsertTodayDailyProfit(req.user._id);
-    
-    // 标记脏数据：从交易日期开始重新计算
+
     const tradeDateStr = trade.date.toISOString().slice(0, 10);
     dirtyDataManager.markDirtyFromDate(req.user._id, tradeDateStr).catch(err => {
       console.error('[Trade] Error marking dirty data:', err);
     });
-    
     await backfillDailyProfit(req.user._id, tradeDateStr);
-    
+
     res.json(trade);
   } catch (error) {
     if (error?.name === 'ValidationError') {

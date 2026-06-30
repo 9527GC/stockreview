@@ -92,7 +92,7 @@ const authLimiter = rateLimit({
 });
 const marketLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: process.env.RATE_LIMIT_MARKET_MAX || 300,
+  max: process.env.RATE_LIMIT_MARKET_MAX || 1000,
   standardHeaders: true,
   legacyHeaders: false,
   message: { message: 'Market data rate limit exceeded, please try again later' }

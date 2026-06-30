@@ -91,8 +91,24 @@
           <template v-if="column.key === 'date'">
             {{ dayjs(record.date).format('YYYY-MM-DD HH:mm') }}
           </template>
+          <template v-if="column.key === 'action'">
+            <a-button type="link" size="small" @click="handleEdit(record)">编辑</a-button>
+            <a-popconfirm
+              title="确定要删除这条交易记录吗？"
+              @confirm="handleDelete(record)"
+            >
+              <a-button type="link" danger size="small">删除</a-button>
+            </a-popconfirm>
+          </template>
         </template>
       </a-table>
+
+      <TradeModal
+        v-model:open="editModalOpen"
+        mode="edit"
+        :trade="editingTrade"
+        @success="onEditSuccess"
+      />
     </template>
   </a-modal>
 </template>
@@ -100,8 +116,11 @@
 <script setup>
 import { computed, ref, watch } from 'vue';
 import dayjs from 'dayjs';
+import { message } from 'ant-design-vue';
 import { getTradeReviews } from '@/api/index';
 import { normalizeSymbol } from '@/utils/stock';
+import { useTradeStore } from '@/stores/trade';
+import TradeModal from './TradeModal.vue';
 
 const props = defineProps({
   open: Boolean,
@@ -112,6 +131,8 @@ const props = defineProps({
 });
 
 defineEmits(['update:open']);
+
+const store = useTradeStore();
 
 const operations = ref([]);
 const loading = ref(false);
@@ -205,11 +226,37 @@ const handleTableChange = (paginationConfig) => {
   if (changed) fetchOperations();
 };
 
+const editModalOpen = ref(false);
+const editingTrade = ref(null);
+
+const handleEdit = (record) => {
+  editingTrade.value = record;
+  editModalOpen.value = true;
+};
+
+const onEditSuccess = async () => {
+  editModalOpen.value = false;
+  editingTrade.value = null;
+  message.success('交易记录已更新');
+  await fetchOperations();
+};
+
+const handleDelete = async (record) => {
+  try {
+    await store.deleteTrade(record.id);
+    message.success('交易记录已删除');
+    await fetchOperations();
+  } catch (err) {
+    message.error('删除失败');
+  }
+};
+
 const columns = [
-  { title: '操作', key: 'type', width: 80 },
+  { title: '类型', key: 'type', width: 80 },
   { title: '数量', dataIndex: 'quantity', key: 'quantity', align: 'right', width: 100 },
   { title: '成交价', key: 'price', align: 'right', width: 120 },
-  { title: '日期', key: 'date', width: 160 }
+  { title: '日期', key: 'date', width: 160 },
+  { title: '操作', key: 'action', width: 120, align: 'center', fixed: 'right' }
 ];
 </script>
 

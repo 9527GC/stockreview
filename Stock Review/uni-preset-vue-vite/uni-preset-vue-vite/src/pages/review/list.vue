@@ -139,6 +139,7 @@ const searchSymbol = ref('');
 const searchDate = ref(null);
 const currentPriceMap = ref({});
 const selectedTradeType = ref(null);
+const selectedReviewStatus = ref(null);
 const defaultPageSize = 50;
 
 const buildQueryParams = (overrides = {}) => ({
@@ -147,6 +148,7 @@ const buildQueryParams = (overrides = {}) => ({
   symbol: searchSymbol.value || undefined,
   date: searchDate.value ? searchDate.value.format('YYYY-MM-DD') : undefined,
   type: selectedTradeType.value || undefined,
+  reviewStatus: selectedReviewStatus.value || undefined,
   ...overrides
 });
 
@@ -158,6 +160,7 @@ const handleReset = () => {
   searchSymbol.value = '';
   searchDate.value = null;
   selectedTradeType.value = null;
+  selectedReviewStatus.value = null;
   store.loadTrades({
     page: 1,
     pageSize: tablePagination.value.pageSize || defaultPageSize
@@ -194,8 +197,11 @@ const handleTableChange = (pagination, filters) => {
   const nextPage = pagination?.current || 1;
   const nextPageSize = pagination?.pageSize || tablePagination.value.pageSize || defaultPageSize;
   const nextType = Array.isArray(filters?.type) ? (filters.type[0] || null) : (filters?.type || null);
-  const filterChanged = nextType !== selectedTradeType.value;
+  const rawReviewStatus = Array.isArray(filters?.reviewResult) ? (filters.reviewResult[0] || null) : (filters?.reviewResult || null);
+  const nextReviewStatus = rawReviewStatus === 'all' ? null : rawReviewStatus;
+  const filterChanged = nextType !== selectedTradeType.value || nextReviewStatus !== selectedReviewStatus.value;
   selectedTradeType.value = nextType;
+  selectedReviewStatus.value = nextReviewStatus;
   store.loadTrades(buildQueryParams({
     page: filterChanged ? 1 : nextPage,
     pageSize: nextPageSize
@@ -273,7 +279,19 @@ const columns = [
   { title: '价格/现价', key: 'price', width: 120 },
   { title: '成交额/数量', key: 'marketValue', width: 140 },
   { title: '交易逻辑', key: 'logic', minWidth: 250 },
-  { title: '复盘结果', key: 'reviewResult', minWidth: 250 },
+  {
+    title: '复盘结果',
+    dataIndex: 'reviewResult',
+    key: 'reviewResult',
+    className: 'review-result-filter-cell',
+    minWidth: 250,
+    filters: [
+      { text: '未复盘', value: 'pending' },
+      { text: '已复盘', value: 'reviewed' }
+    ],
+    filterMultiple: false,
+    filteredValue: selectedReviewStatus.value ? [selectedReviewStatus.value] : null
+  },
   { title: '操作', key: 'action', width: 120, fixed: 'right', align: 'center' },
 ];
 
@@ -446,5 +464,24 @@ const handleTradeSuccess = () => {
   border: 0 !important;
   height: 0 !important;
   line-height: 0 !important;
+}
+
+/* 让复盘结果列的筛选图标紧跟标题文字，不靠到列宽最右侧 */
+:deep(.review-result-filter-cell) {
+  display: flex !important;
+  align-items: center;
+
+  .ant-table-column-sorters {
+    flex: 0 0 auto;
+  }
+
+  .ant-table-filter-trigger {
+    position: static;
+    width: auto;
+    height: auto;
+    padding: 0;
+    margin-left: 4px;
+    transform: none;
+  }
 }
 </style>

@@ -387,6 +387,15 @@ export const useTradeStore = defineStore('trade', () => {
           ? Number(h.avgCost) * Number(h.quantity)
           : null;
 
+        const lastTradeDateTimestamp = h.lastTradeDate
+          ? dayjs(h.lastTradeDate).valueOf()
+          : (trades.value || [])
+              .filter(t => normalizeSymbol(t.symbol) === normalizeSymbol(h.symbol))
+              .reduce((max, t) => {
+                const ts = t.timestamp || (t.date ? dayjs(t.date).valueOf() : 0);
+                return ts > max ? ts : max;
+              }, 0) || null;
+
         const unrealizedProfit = h.unrealizedProfit !== null && h.unrealizedProfit !== undefined
           ? Number(h.unrealizedProfit)
           : (
@@ -426,7 +435,8 @@ export const useTradeStore = defineStore('trade', () => {
           positionRatio: h.positionRatio,
           positionPercent: h.positionPercent,
           marketTag: marketInfo?.text,
-          marketTagColor: marketInfo?.color
+          marketTagColor: marketInfo?.color,
+          lastTradeDate: lastTradeDateTimestamp || null
         };
       });
     }
