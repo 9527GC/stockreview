@@ -127,6 +127,15 @@ app.use((req, res) => {
   res.status(404).json({ message: `Route ${req.method} ${req.url} not found` });
 });
 
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error(`${new Date().toISOString()} Error:`, err);
+  if (err.message === 'Not allowed by CORS') {
+    return res.status(403).json({ message: 'CORS policy: origin not allowed' });
+  }
+  res.status(500).json({ message: 'Internal server error' });
+});
+
 // Database Connection
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => {
