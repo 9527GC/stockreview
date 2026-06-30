@@ -17,7 +17,9 @@ const tradeSchema = new mongoose.Schema({
   type: { type: String, enum: ['BUY', 'SELL'], required: true },
   price: { type: Number, required: true },
   quantity: { type: Number, required: true },
-  commission: { type: Number, default: 0 }, // 手续费
+  commission: { type: Number, default: 0 }, // 手续费（最终金额）
+  feeMode: { type: String, enum: ['rate', 'amount'], default: null }, // rate=按手续费率, amount=按费用
+  feeRate: { type: Number, default: null }, // 仅 mode=rate 时使用，单位：‱（万分之一）
   currency: { type: String, default: 'CNY' }, // CNY, USD, HKD
   market: { type: String }, // SH, SZ, HK, US
   mood: { type: String, enum: TRADE_MOODS, default: 'NEUTRAL' },

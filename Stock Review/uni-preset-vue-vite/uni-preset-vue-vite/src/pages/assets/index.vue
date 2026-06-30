@@ -102,8 +102,8 @@
               <a-range-picker v-model:value="dateRange" size="small" style="width: 220px" @change="handleRangeChange" />
             </div>
           </div>
-          <div v-if="chartData.length === 0" style="padding: 100px; text-align: center; color: #999;">
-            正在加载图表数据...
+          <div v-if="chartData.length === 0" style="padding: 90px 0;">
+            <a-empty description="暂无持仓" />
           </div>
           <div v-else>
             <ProfitChart :data="chartData" style="height: 281px; width: 100%;" />
@@ -132,7 +132,7 @@
         :columns="columns" 
         :data-source="sortedHoldings" 
         :row-key="record => record.symbol" 
-        :pagination="{ pageSize: 5 }"
+        :pagination="{ pageSize: 50 }"
         :scroll="{ x: 1000 }"
       >
         <template #bodyCell="{ column, record }">
@@ -367,15 +367,26 @@ const sortedHoldings = computed(() => {
 
 const todayStr = computed(() => dayjs().format('YYYY-MM-DD'));
 
+const handleVisibilityChange = () => {
+  if (document.hidden) {
+    store.stopPolling();
+  } else {
+    store.fetchMarketOverview();
+    store.startPolling();
+  }
+};
+
 onMounted(async () => {
   await store.loadTrades();
   store.fetchMarketOverview();
   store.startPolling();
   fetchChartData();
+  document.addEventListener('visibilitychange', handleVisibilityChange);
 });
 
 onUnmounted(() => {
   store.stopPolling();
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
 });
 
 const handleTradeSuccess = () => {

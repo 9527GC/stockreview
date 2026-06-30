@@ -65,6 +65,21 @@ export const addTrade = (data) => {
   });
 };
 
+export const getCommissionPreference = () => {
+  return request({
+    url: '/api/trades/commission-preference',
+    method: 'GET'
+  });
+};
+
+export const updateCommissionPreference = (data) => {
+  return request({
+    url: '/api/trades/commission-preference',
+    method: 'PUT',
+    data
+  });
+};
+
 export const updateTrade = (id, data) => {
   return request({
     url: `/api/trades/${id}`,

@@ -4,7 +4,7 @@
     title="持仓明细"
     @update:open="$emit('update:open', $event)"
     :footer="null"
-    width="900px"
+    width="780px"
     centered
   >
     <div v-if="!holding" style="color: #999; padding: 12px 0;">未选择持仓</div>
@@ -21,55 +21,55 @@
         </div>
       </div>
 
-      <a-row :gutter="[16, 16]" style="margin-bottom: 16px;">
-        <a-col :span="8">
-          <a-card :bordered="false" style="background: #fafafa;">
-            <div style="color: rgba(0,0,0,0.45); font-size: 12px;">今日盈亏</div>
-            <div v-if="holding.dailyProfit !== null && holding.dailyProfit !== undefined" :style="{ color: holding.dailyProfit >= 0 ? '#cf1322' : '#3f8600', fontWeight: '600' }">
-              {{ holding.dailyProfit >= 0 ? '+' : '' }}{{ currencySymbol }}{{ Number(holding.dailyProfit).toFixed(2) }}
-            </div>
-            <div v-else style="color: #999; font-weight: 600;">--</div>
-          </a-card>
-        </a-col>
-        <a-col :span="8">
-          <a-card :bordered="false" style="background: #fafafa;">
-            <div style="color: rgba(0,0,0,0.45); font-size: 12px;">持仓盈亏</div>
-            <div v-if="holding.unrealizedProfit !== null && holding.unrealizedProfit !== undefined" :style="{ color: holding.unrealizedProfit >= 0 ? '#cf1322' : '#3f8600', fontWeight: '600' }">
-              {{ holding.unrealizedProfit >= 0 ? '+' : '' }}{{ currencySymbol }}{{ Number(holding.unrealizedProfit).toFixed(2) }}
-            </div>
-            <div v-else style="color: #999; font-weight: 600;">--</div>
-          </a-card>
-        </a-col>
-        <a-col :span="8">
-          <a-card :bordered="false" style="background: #fafafa;">
-            <div style="color: rgba(0,0,0,0.45); font-size: 12px;">累计盈亏</div>
-            <div v-if="holding.cumulativeProfit !== null && holding.cumulativeProfit !== undefined" :style="{ color: holding.cumulativeProfit >= 0 ? '#cf1322' : '#3f8600', fontWeight: '600' }">
-              {{ holding.cumulativeProfit >= 0 ? '+' : '' }}{{ currencySymbol }}{{ Number(holding.cumulativeProfit).toFixed(2) }}
-            </div>
-            <div v-else style="color: #999; font-weight: 600;">--</div>
-          </a-card>
-        </a-col>
-        <a-col :span="8">
-          <a-card :bordered="false" style="background: #fafafa;">
-            <div style="color: rgba(0,0,0,0.45); font-size: 12px;">持仓数量</div>
-            <div style="font-weight: 600; color: #1f1f1f;">{{ holding.quantity !== null && holding.quantity !== undefined ? Number(holding.quantity) : '--' }}</div>
-          </a-card>
-        </a-col>
-        <a-col :span="8">
-          <a-card :bordered="false" style="background: #fafafa;">
-            <div style="color: rgba(0,0,0,0.45); font-size: 12px;">持仓成本</div>
-            <div style="font-weight: 600; color: #1f1f1f;">{{ holding.avgCost !== null && holding.avgCost !== undefined ? (currencySymbol + Number(holding.avgCost).toFixed(2)) : '--' }}</div>
-          </a-card>
-        </a-col>
-        <a-col :span="8">
-          <a-card :bordered="false" style="background: #fafafa;">
-            <div style="color: rgba(0,0,0,0.45); font-size: 12px;">成本金额</div>
-            <div style="font-weight: 600; color: #1f1f1f;">{{ totalCost !== null ? (currencySymbol + totalCost.toFixed(2)) : '--' }}</div>
-          </a-card>
-        </a-col>
-      </a-row>
+      <div class="metrics-panel">
+        <div class="metric-item">
+          <span class="metric-label">今日盈亏</span>
+          <span
+            v-if="holding.dailyProfit !== null && holding.dailyProfit !== undefined"
+            class="metric-value"
+            :class="holding.dailyProfit >= 0 ? 'positive' : 'negative'"
+          >
+            {{ holding.dailyProfit >= 0 ? '+' : '' }}{{ currencySymbol }}{{ Number(holding.dailyProfit).toFixed(2) }}
+          </span>
+          <span v-else class="metric-value">--</span>
+        </div>
+        <div class="metric-item">
+          <span class="metric-label">持仓盈亏</span>
+          <span
+            v-if="holding.unrealizedProfit !== null && holding.unrealizedProfit !== undefined"
+            class="metric-value"
+            :class="holding.unrealizedProfit >= 0 ? 'positive' : 'negative'"
+          >
+            {{ holding.unrealizedProfit >= 0 ? '+' : '' }}{{ currencySymbol }}{{ Number(holding.unrealizedProfit).toFixed(2) }}
+          </span>
+          <span v-else class="metric-value">--</span>
+        </div>
+        <div class="metric-item">
+          <span class="metric-label">累计盈亏</span>
+          <span
+            v-if="holding.cumulativeProfit !== null && holding.cumulativeProfit !== undefined"
+            class="metric-value"
+            :class="holding.cumulativeProfit >= 0 ? 'positive' : 'negative'"
+          >
+            {{ holding.cumulativeProfit >= 0 ? '+' : '' }}{{ currencySymbol }}{{ Number(holding.cumulativeProfit).toFixed(2) }}
+          </span>
+          <span v-else class="metric-value">--</span>
+        </div>
+        <div class="metric-item">
+          <span class="metric-label">持仓数量</span>
+          <span class="metric-value">{{ holding.quantity !== null && holding.quantity !== undefined ? Number(holding.quantity) : '--' }}</span>
+        </div>
+        <div class="metric-item">
+          <span class="metric-label">持仓成本</span>
+          <span class="metric-value">{{ holding.avgCost !== null && holding.avgCost !== undefined ? (currencySymbol + Number(holding.avgCost).toFixed(2)) : '--' }}</span>
+        </div>
+        <div class="metric-item">
+          <span class="metric-label">成本金额</span>
+          <span class="metric-value">{{ totalCost !== null ? (currencySymbol + totalCost.toFixed(2)) : '--' }}</span>
+        </div>
+      </div>
 
-      <div style="font-weight: 600; color: #1f1f1f; margin-bottom: 8px;">操作记录</div>
+      <div class="section-title" style="margin-top: 16px;">操作记录</div>
       <a-table
         :columns="columns"
         :data-source="operations"
@@ -213,3 +213,55 @@ const columns = [
 ];
 </script>
 
+<style scoped>
+.metrics-panel {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: #f0f0f0;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.metric-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #fafafa;
+}
+
+.metric-label {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.metric-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: #262626;
+  line-height: 1.4;
+  text-align: right;
+}
+
+.metric-value.positive {
+  color: #cf1322;
+}
+
+.metric-value.negative {
+  color: #3f8600;
+}
+
+.section-title {
+  font-size: 16px;
+  font-weight: bold;
+  margin-bottom: 12px;
+  border-left: 4px solid #1890ff;
+  padding-left: 8px;
+  color: #1f1f1f;
+}
+</style>

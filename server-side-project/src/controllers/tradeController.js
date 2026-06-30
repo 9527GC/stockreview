@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const { Trade, Holding } = require('../models/Trade');
 const { Asset } = require('../models/Asset');
+const User = require('../models/User');
 const Transfer = require('../models/Transfer');
 const { getRates } = require('../utils/currency');
 const { getQuotes, buildTradeMarketSnapshot, normalizeMarketOverviewSnapshot, inferSnapshotStatus } = require('../utils/marketData');
@@ -564,7 +565,7 @@ exports.deleteHolding = async (req, res) => {
 
 exports.addTrade = async (req, res) => {
   try {
-    let { symbol, name, date, type, price, quantity, logic, currency, market, commission, mood, marketOverview, news, isSystemCompliant, cognitiveBias, improvementMeasures } = req.body;
+    let { symbol, name, date, type, price, quantity, logic, currency, market, commission, feeMode, feeRate, feeAmount, mood, marketOverview, news, isSystemCompliant, cognitiveBias, improvementMeasures } = req.body;
     symbol = normalizeSymbol(symbol);
     date = parseDateInOffset(date, 480);
     if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
@@ -581,12 +582,24 @@ exports.addTrade = async (req, res) => {
     }
     price = Number(price);
     quantity = Number(quantity);
-    commission = Number(commission) || 0;
     if (!Number.isFinite(price) || price <= 0) {
       return res.status(400).json({ message: 'Price must be a positive number' });
     }
     if (!Number.isFinite(quantity) || quantity <= 0) {
       return res.status(400).json({ message: 'Quantity must be a positive number' });
+    }
+
+    // 根据 feeMode 计算最终手续费，优先信任 feeMode/feeRate/feeAmount，回退到 commission
+    feeMode = ['rate', 'amount'].includes(feeMode) ? feeMode : null;
+    feeRate = Number(feeRate) || 0;
+    feeAmount = Number(feeAmount) || 0;
+    const tradeAmount = price * quantity;
+    if (feeMode === 'rate') {
+      commission = tradeAmount * feeRate / 10000;
+    } else if (feeMode === 'amount') {
+      commission = feeAmount;
+    } else {
+      commission = Number(commission) || 0;
     }
     if (!Number.isFinite(commission) || commission < 0) {
       return res.status(400).json({ message: 'Commission must be non-negative' });
@@ -663,6 +676,8 @@ exports.addTrade = async (req, res) => {
       quantity,
       logic,
       commission,
+      feeMode,
+      feeRate: feeMode === 'rate' ? feeRate : null,
       currency: currency || 'CNY',
       market: tradeMarket,
       mood,
@@ -739,7 +754,20 @@ exports.addTrade = async (req, res) => {
     });
     
     await backfillDailyProfit(req.user._id, tradeDateStr);
-    
+
+    // 更新用户手续费偏好（按市场记录最近一次的 mode 和数值）
+    const feeMarket = marketFromTrade({ market: tradeMarket, symbol });
+    if (feeMarket && feeMode) {
+      User.findByIdAndUpdate(req.user._id, {
+        [`commissionPreference.${feeMarket}.mode`]: feeMode,
+        [`commissionPreference.${feeMarket}.rate`]: feeMode === 'rate' ? feeRate : 5,
+        [`commissionPreference.${feeMarket}.amount`]: feeMode === 'amount' ? feeAmount : 0,
+        [`commissionPreference.${feeMarket}.updatedAt`]: new Date()
+      }).catch(err => {
+        console.error('[Trade] Failed to update commission preference:', err);
+      });
+    }
+
     res.status(201).json(trade);
   } catch (error) {
     if (error?.name === 'ValidationError') {
@@ -833,6 +861,58 @@ exports.updateTrade = async (req, res) => {
     if (error?.name === 'ValidationError') {
       return res.status(400).json({ message: error.message });
     }
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.getCommissionPreference = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).lean();
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const pref = user.commissionPreference || {};
+    const markets = ['CN', 'HK', 'US'];
+    const result = {};
+    for (const m of markets) {
+      const p = pref.get ? pref.get(m) : pref[m];
+      result[m] = p || { mode: 'rate', rate: 5, amount: 0, updatedAt: null };
+    }
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.updateCommissionPreference = async (req, res) => {
+  try {
+    const { market, mode, rate, amount } = req.body;
+    if (!['CN', 'HK', 'US'].includes(market)) {
+      return res.status(400).json({ message: 'Market must be CN, HK or US' });
+    }
+    if (!['rate', 'amount'].includes(mode)) {
+      return res.status(400).json({ message: 'Mode must be rate or amount' });
+    }
+    const numRate = Number(rate);
+    const numAmount = Number(amount);
+    if (mode === 'rate' && (!Number.isFinite(numRate) || numRate < 0)) {
+      return res.status(400).json({ message: 'Rate must be non-negative' });
+    }
+    if (mode === 'amount' && (!Number.isFinite(numAmount) || numAmount < 0)) {
+      return res.status(400).json({ message: 'Amount must be non-negative' });
+    }
+
+    const update = {
+      [`commissionPreference.${market}.mode`]: mode,
+      [`commissionPreference.${market}.rate`]: mode === 'rate' ? numRate : 5,
+      [`commissionPreference.${market}.amount`]: mode === 'amount' ? numAmount : 0,
+      [`commissionPreference.${market}.updatedAt`]: new Date()
+    };
+    const user = await User.findByIdAndUpdate(req.user._id, update, { new: true }).lean();
+    const p = user.commissionPreference || {};
+    const saved = p.get ? p.get(market) : p[market];
+    res.json(saved || { mode, rate: numRate, amount: numAmount });
+  } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };

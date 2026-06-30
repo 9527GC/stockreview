@@ -10,11 +10,11 @@
     okText="保存"
     cancelText="取消"
   >
-    <div style="padding: 24px 12px 24px 24px;">
-      <a-form :model="formState" layout="vertical">
+    <div style="padding: 16px 12px 16px 24px;">
+      <a-form :model="formState" layout="vertical" class="trade-form">
       <a-row :gutter="16">
         <a-col :span="12">
-          <a-form-item label="股票代码/名称" required>
+          <a-form-item label="股票代码/名称" required :validate-status="validationErrors.symbol ? 'error' : ''" :help="validationErrors.symbol">
             <a-select
               v-model:value="formState.symbol"
               show-search
@@ -53,18 +53,38 @@
 
       <a-row :gutter="16">
         <a-col :span="8">
-          <a-form-item label="成交价格" required>
+          <a-form-item label="成交价格" required :validate-status="validationErrors.price ? 'error' : ''" :help="validationErrors.price">
             <a-input-number v-model:value="formState.price" style="width: 100%" :min="0" step="0.01" />
           </a-form-item>
         </a-col>
         <a-col :span="8">
-          <a-form-item label="成交数量" required>
+          <a-form-item label="成交数量" required :validate-status="validationErrors.quantity ? 'error' : ''" :help="validationErrors.quantity">
             <a-input-number v-model:value="formState.quantity" style="width: 100%" :min="0" :step="100" :precision="0" />
           </a-form-item>
         </a-col>
         <a-col :span="8">
-          <a-form-item label="手续费率">
-            <a-input-number v-model:value="formState.feeRate" style="width: 100%" :min="0" addon-after="‱" />
+          <a-form-item>
+            <template #label>
+              <a-dropdown placement="bottomLeft">
+                <span style="cursor: pointer;">
+                  {{ feeLabel }}
+                  <DownOutlined style="font-size: 12px; margin-left: 4px;" />
+                </span>
+                <template #overlay>
+                  <a-menu @click="handleFeeModeChange">
+                    <a-menu-item key="rate">按手续费率</a-menu-item>
+                    <a-menu-item key="amount">按费用</a-menu-item>
+                  </a-menu>
+                </template>
+              </a-dropdown>
+            </template>
+            <a-input-number
+              v-model:value="feeInputValue"
+              style="width: 100%;"
+              :min="0"
+              :precision="feePrecision"
+              :addon-after="feeAddonAfter"
+            />
           </a-form-item>
         </a-col>
       </a-row>
@@ -112,7 +132,7 @@
 
         <div style="display: flex; gap: 24px; margin-bottom: 12px;">
           <div style="flex: 1;">
-             <div style="color: #8c8c8c; margin-bottom: 4px; font-size: 12px;">成交量</div>
+             <div style="color: #8c8c8c; margin-bottom: 4px; font-size: 12px;">{{ volumeLabel }}</div>
              <div>{{ formatOverviewVolume(marketOverview.volume) }}</div>
           </div>
           <div style="flex: 1; border-left: 1px solid #f0f0f0; padding-left: 16px;">
@@ -175,7 +195,7 @@
       <!-- Review Inputs -->
       <a-row :gutter="16">
         <a-col :span="24">
-          <a-form-item label="个人状态" name="mood">
+          <a-form-item label="个人状态" name="mood" required :validate-status="validationErrors.mood ? 'error' : ''" :help="validationErrors.mood">
             <a-select v-model:value="formState.mood" style="width: 100%;">
               <a-select-option value="NEUTRAL">中性</a-select-option>
               <a-select-option value="CALM">冷静</a-select-option>
@@ -188,7 +208,7 @@
           </a-form-item>
         </a-col>
         <a-col :span="24">
-          <a-form-item label="交易逻辑" name="logic">
+          <a-form-item label="交易逻辑" name="logic" required :validate-status="validationErrors.logic ? 'error' : ''" :help="validationErrors.logic">
             <a-textarea
               v-model:value="formState.logic"
               :rows="4"
@@ -217,7 +237,7 @@
 import { reactive, watch, ref, nextTick, computed } from 'vue';
 import { useTradeStore } from '@/stores/trade';
 import { message } from 'ant-design-vue';
-import { OrderedListOutlined, PictureOutlined } from '@ant-design/icons-vue';
+import { OrderedListOutlined, PictureOutlined, DownOutlined } from '@ant-design/icons-vue';
 import { searchStock } from '@/api/index';
 import dayjs from 'dayjs';
 
@@ -239,14 +259,49 @@ const formState = reactive({
   type: 'BUY',
   price: 0,
   quantity: 100,
+  feeMode: 'rate',
   feeRate: 5,
+  feeAmount: 0,
   date: dayjs(),
   logic: '',
   mood: 'NEUTRAL'
 });
 
+const currencyCode = computed(() => {
+  const map = { HK: 'HKD', US: 'USD', CN: 'CNY' };
+  return map[formState.market] || 'CNY';
+});
+
+const feeLabel = computed(() => formState.feeMode === 'rate' ? '手续费率' : '手续费');
+
+const feeInputValue = computed({
+  get() {
+    return formState.feeMode === 'rate' ? formState.feeRate : formState.feeAmount;
+  },
+  set(val) {
+    if (formState.feeMode === 'rate') {
+      formState.feeRate = val;
+    } else {
+      formState.feeAmount = val;
+    }
+  }
+});
+
+const feeAddonAfter = computed(() => formState.feeMode === 'rate' ? '‱' : currencyCode.value);
+
+const feePrecision = computed(() => formState.feeMode === 'amount' ? 2 : undefined);
+
+const handleFeeModeChange = ({ key }) => {
+  formState.feeMode = key;
+};
+
+const volumeLabel = computed(() => {
+  return formState.market === 'CN' ? 'A股全市成交' : '成交量';
+});
+
 watch(() => props.open, (newVal) => {
   if (newVal) {
+    Object.keys(validationErrors).forEach(key => validationErrors[key] = '');
     resetMarketOverviewDisplay();
     resetMarketOverviewNotes();
     if (props.initialData && props.initialData.symbol) {
@@ -262,11 +317,15 @@ watch(() => props.open, (newVal) => {
       formState.type = 'BUY';
       formState.price = 0;
       formState.quantity = 100;
-      formState.feeRate = 5;
       formState.mood = 'NEUTRAL';
       formState.logic = '';
       formState.date = dayjs();
     }
+    // 先恢复默认，再按当前市场加载最近一次手续费偏好
+    formState.feeMode = 'rate';
+    formState.feeRate = 5;
+    formState.feeAmount = 0;
+    loadCommissionPreference(formState.market);
   }
 });
 
@@ -601,6 +660,28 @@ watch(() => formState.symbol, (newVal) => {
   }
 });
 
+const loadCommissionPreference = async (market) => {
+  if (!['CN', 'HK', 'US'].includes(market)) return;
+  try {
+    const pref = await store.fetchCommissionPreference();
+    const p = pref?.[market];
+    if (p) {
+      formState.feeMode = p.mode === 'amount' ? 'amount' : 'rate';
+      if (formState.feeMode === 'rate') {
+        formState.feeRate = Number(p.rate) || 0;
+      } else {
+        formState.feeAmount = Number(p.amount) || 0;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load commission preference:', err);
+  }
+};
+
+watch(() => formState.market, (newMarket) => {
+  loadCommissionPreference(newMarket);
+});
+
 const fetchPrice = async (symbol) => {
   try {
     const res = await store.fetchRealTimeQuote(symbol);
@@ -618,10 +699,55 @@ const handleCancel = () => {
 
 const loading = ref(false);
 
+const validationErrors = reactive({
+  symbol: '',
+  price: '',
+  quantity: '',
+  mood: '',
+  logic: ''
+});
+
+const clearFieldError = (field) => {
+  if (validationErrors[field]) validationErrors[field] = '';
+};
+
+const validateForm = () => {
+  Object.keys(validationErrors).forEach(key => validationErrors[key] = '');
+  let isValid = true;
+
+  if (!formState.symbol) {
+    validationErrors.symbol = '请选择股票代码/名称';
+    isValid = false;
+  }
+  if (!formState.price || formState.price <= 0) {
+    validationErrors.price = '请输入成交价格';
+    isValid = false;
+  }
+  if (!formState.quantity || formState.quantity <= 0) {
+    validationErrors.quantity = '请输入成交数量';
+    isValid = false;
+  }
+  if (!formState.mood) {
+    validationErrors.mood = '请选择个人状态';
+    isValid = false;
+  }
+  if (!formState.logic || !formState.logic.trim()) {
+    validationErrors.logic = '请输入交易逻辑';
+    isValid = false;
+  }
+  return isValid;
+};
+
+watch(() => formState.symbol, () => clearFieldError('symbol'));
+watch(() => formState.price, () => clearFieldError('price'));
+watch(() => formState.quantity, () => clearFieldError('quantity'));
+watch(() => formState.mood, () => clearFieldError('mood'));
+watch(() => formState.logic, () => clearFieldError('logic'));
+
 const handleSubmit = () => {
   if (loading.value) return;
 
-  if (!formState.symbol || !formState.price || !formState.quantity || !formState.mood || !formState.logic) {
+  if (!validateForm()) {
     message.error('请填写完整的交易信息');
     return;
   }
@@ -645,18 +771,30 @@ const handleSubmit = () => {
     ...(marketOverview.images && marketOverview.images.length ? { images: marketOverview.images } : {})
   };
 
+  const tradeAmount = formState.price * formState.quantity;
+  const commission = formState.feeMode === 'rate'
+    ? (tradeAmount * (formState.feeRate || 0)) / 10000
+    : Number(formState.feeAmount || 0);
+
   const tradeData = {
     ...formState,
     name: matchedOption ? matchedOption.name : '',
     currency: formState.market === 'HK' ? 'HKD' : formState.market === 'US' ? 'USD' : 'CNY',
     marketOverview: marketOverviewSnapshot,
     news: marketOverview.news || '',
-    commission: (formState.price * formState.quantity * (formState.feeRate || 0)) / 10000,
+    commission,
+    feeMode: formState.feeMode,
+    feeRate: formState.feeMode === 'rate' ? formState.feeRate : null,
+    feeAmount: formState.feeMode === 'amount' ? formState.feeAmount : null,
     date: formState.date.format('YYYY-MM-DD HH:mm:ss')
   };
 
   // 清理不需要发送的字段
-  delete tradeData.feeRate;
+  if (formState.feeMode === 'rate') {
+    delete tradeData.feeAmount;
+  } else {
+    delete tradeData.feeRate;
+  }
 
   store.addTrade(tradeData).then(() => {
     loading.value = false;
@@ -670,7 +808,9 @@ const handleSubmit = () => {
     formState.quantity = 100;
     formState.logic = '';
     formState.mood = 'NEUTRAL';
+    formState.feeMode = 'rate';
     formState.feeRate = 5;
+    formState.feeAmount = 0;
     formState.date = dayjs();
     resetMarketOverviewNotes();
   }).catch((err) => {
@@ -688,6 +828,10 @@ const handleSubmit = () => {
 </script>
 
 <style scoped>
+.trade-form :deep(.ant-form-item) {
+  margin-bottom: 12px;
+}
+
 .market-radio-group :deep(.ant-radio-button-wrapper-checked.ant-radio-button-wrapper-disabled) {
   background-color: #e6f7ff;
   color: #1890ff;

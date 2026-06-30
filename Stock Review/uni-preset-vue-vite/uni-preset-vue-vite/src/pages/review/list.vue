@@ -139,7 +139,7 @@ const searchSymbol = ref('');
 const searchDate = ref(null);
 const currentPriceMap = ref({});
 const selectedTradeType = ref(null);
-const defaultPageSize = 10;
+const defaultPageSize = 50;
 
 const buildQueryParams = (overrides = {}) => ({
   page: 1,
@@ -306,42 +306,62 @@ const formatDate = (date) => {
 
 const normalizeMood = (mood) => String(mood || '').trim().toLowerCase();
 
+const MOOD_TEXT_MAP = {
+  neutral: '中性',
+  calm: '冷静',
+  confident: '自信',
+  anxious: '焦虑',
+  impulsive: '冲动',
+  excited: '兴奋',
+  fear: '恐惧'
+};
+
+const MOOD_STYLE_MAP = {
+  neutral: {
+    color: '#595959',
+    backgroundColor: '#fafafa',
+    border: '1px solid #d9d9d9'
+  },
+  calm: {
+    color: '#0958d9',
+    backgroundColor: '#e6f4ff',
+    border: '1px solid #91caff'
+  },
+  confident: {
+    color: '#531dab',
+    backgroundColor: '#f9f0ff',
+    border: '1px solid #d3adf7'
+  },
+  anxious: {
+    color: '#389e0d',
+    backgroundColor: '#f6ffed',
+    border: '1px solid #b7eb8f'
+  },
+  impulsive: {
+    color: '#c41d7f',
+    backgroundColor: '#fff0f6',
+    border: '1px solid #ffadd2'
+  },
+  excited: {
+    color: '#d46b08',
+    backgroundColor: '#fff7e6',
+    border: '1px solid #ffd591'
+  },
+  fear: {
+    color: '#cf1322',
+    backgroundColor: '#fff1f0',
+    border: '1px solid #ffa39e'
+  }
+};
+
 const formatMood = (mood) => {
   const normalizedMood = normalizeMood(mood);
-  const map = {
-    calm: '冷静',
-    excited: '兴奋',
-    anxious: '焦虑',
-    fear: '恐慌'
-  };
-  return map[normalizedMood] || mood || '--';
+  return MOOD_TEXT_MAP[normalizedMood] || mood || '--';
 };
 
 const getMoodTagStyle = (mood) => {
   const normalizedMood = normalizeMood(mood);
-  const map = {
-    calm: {
-      color: '#0958d9',
-      backgroundColor: '#e6f4ff',
-      border: '1px solid #91caff'
-    },
-    excited: {
-      color: '#d46b08',
-      backgroundColor: '#fff7e6',
-      border: '1px solid #ffd591'
-    },
-    anxious: {
-      color: '#389e0d',
-      backgroundColor: '#f6ffed',
-      border: '1px solid #b7eb8f'
-    },
-    fear: {
-      color: '#cf1322',
-      backgroundColor: '#fff1f0',
-      border: '1px solid #ffa39e'
-    }
-  };
-  return map[normalizedMood] || {
+  return MOOD_STYLE_MAP[normalizedMood] || {
     color: '#595959',
     backgroundColor: '#fafafa',
     border: '1px solid #d9d9d9'

@@ -98,19 +98,22 @@ exports.getProfitCurve = async (req, res) => {
     const firstDataDate = curveDates[0];
     const lastDataDate = curveDates[curveDates.length - 1];
 
-    // 以所选范围起点为归一化基准；若该日前无资产数据，则回退到第一条数据日
+    // 以所选范围起点前一日的总资产为归一化基准；若起点就是第一条数据日，
+    // 没有前一日记录，则用本金（总资产 - 累计盈亏）作为基准。
     const baselineDate = effectiveStart || firstDataDate || effectiveEnd;
     let rangeStartTotalAssets = null;
     if (baselineDate) {
+      const prevDateStr = new Date(Date.parse(baselineDate) - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
       const startRecord = await DailyProfit.findOne({
         userId: req.user._id,
-        date: { $lte: baselineDate }
+        date: { $lte: prevDateStr }
       }).sort({ date: -1 });
 
       if (startRecord) {
         rangeStartTotalAssets = startRecord.totalAssets;
       } else if (firstDataDate) {
-        rangeStartTotalAssets = data[0]?.totalAssets ?? null;
+        const firstRecord = data[0];
+        rangeStartTotalAssets = (firstRecord?.totalAssets ?? 0) - (firstRecord?.cumulativeProfitAmount ?? 0);
       }
     }
 
