@@ -334,7 +334,7 @@ const innerColumns = [
   { title: '价格', dataIndex: 'price', key: 'price', align: 'right' },
   { title: '数量', dataIndex: 'quantity', key: 'quantity', align: 'right' },
   { title: '金额', key: 'amount', align: 'right' },
-  { title: '手续费', dataIndex: 'fee', key: 'fee', align: 'right' },
+  { title: '手续费', dataIndex: 'commission', key: 'commission', align: 'right' },
   { title: '交易逻辑', dataIndex: 'logic', key: 'logic', ellipsis: true },
   { title: '操作', key: 'action', width: 80, align: 'center' }
 ];

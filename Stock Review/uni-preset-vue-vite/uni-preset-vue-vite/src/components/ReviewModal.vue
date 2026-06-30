@@ -13,24 +13,55 @@
     <!-- Part 1: Operation Details (ReadOnly) -->
     <div class="review-section">
       <div class="section-title">操作详情</div>
-      <a-descriptions bordered size="small" :column="2">
-        <a-descriptions-item label="股票名称">{{ record.stockName || '--' }}</a-descriptions-item>
-        <a-descriptions-item label="股票代码">{{ record.symbol }}</a-descriptions-item>
-        <a-descriptions-item label="交易类型">
-          <a-tag :color="record.type === 'BUY' ? 'red' : 'green'">
-            {{ record.type === 'BUY' ? '买入' : '卖出' }}
-          </a-tag>
-        </a-descriptions-item>
-        <a-descriptions-item label="成交价格">{{ getCurrencySymbol(record.currency) }}{{ Number(record.price).toFixed(2) }}</a-descriptions-item>
-        <a-descriptions-item label="成交数量">{{ record.quantity }}</a-descriptions-item>
-        <a-descriptions-item label="成交时间">{{ formatDate(record.date) }}</a-descriptions-item>
-        <a-descriptions-item label="交易状态" :span="2">
-          <span class="mood-tag" :style="getMoodTagStyle(record.mood)">{{ formatMood(record.mood) }}</span>
-        </a-descriptions-item>
-        <a-descriptions-item label="交易逻辑" :span="2">
-          {{ record.logic }}
-        </a-descriptions-item>
-      </a-descriptions>
+
+      <div class="operation-detail">
+        <div class="detail-row">
+          <div class="detail-item">
+            <span class="detail-label">股票名称</span>
+            <span class="detail-value">{{ record.stockName || '--' }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">股票代码</span>
+            <span class="detail-value">{{ record.symbol }}</span>
+          </div>
+        </div>
+
+        <div class="detail-row">
+          <div class="detail-item">
+            <span class="detail-label">交易类型</span>
+            <a-tag :color="record.type === 'BUY' ? 'red' : 'green'">
+              {{ record.type === 'BUY' ? '买入' : '卖出' }}
+            </a-tag>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">成交价格</span>
+            <span class="detail-value">{{ getCurrencySymbol(record.currency) }}{{ Number(record.price).toFixed(2) }}</span>
+          </div>
+        </div>
+
+        <div class="detail-row">
+          <div class="detail-item">
+            <span class="detail-label">成交数量</span>
+            <span class="detail-value">{{ record.quantity }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">成交时间</span>
+            <span class="detail-value">{{ formatDate(record.date) }}</span>
+          </div>
+        </div>
+
+        <div class="detail-row">
+          <div class="detail-item full">
+            <span class="detail-label">交易状态</span>
+            <span class="mood-tag" :style="getMoodTagStyle(record.mood)">{{ formatMood(record.mood) }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="logic-block">
+        <div class="detail-label">交易逻辑</div>
+        <div class="logic-content">{{ record.logic }}</div>
+      </div>
     </div>
 
     <!-- Part 1.5: Market Overview -->
@@ -70,7 +101,7 @@
 
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 16px;">
           <div>
-            <div style="color: #8c8c8c; margin-bottom: 6px; font-size: 12px;">成交量</div>
+            <div style="color: #8c8c8c; margin-bottom: 6px; font-size: 12px;">A股全市成交</div>
             <div style="font-weight: 500;">{{ formatOverviewVolume(marketData.volume) }}</div>
           </div>
           <div style="border-left: 1px solid #f0f0f0; padding-left: 20px;">
@@ -98,9 +129,9 @@
     <div class="review-section" style="margin-top: 24px;">
       <div class="section-title">复盘分析</div>
       <a-form layout="vertical" :model="formState">
-        <a-form-item required>
+        <a-form-item :validate-status="validationErrors.isSystemCompliant ? 'error' : ''" :help="validationErrors.isSystemCompliant">
           <template #label>
-            1. 是否符合系统
+            <span><span style="color: #ff4d4f; margin-right: 4px;">*</span>1. 是否符合系统</span>
             <a-tooltip overlay-class-name="review-tooltip">
               <template #title>
                 是符合计划的买卖？<br />
@@ -115,9 +146,9 @@
             :rows="3"
           />
         </a-form-item>
-        <a-form-item required>
+        <a-form-item :validate-status="validationErrors.cognitiveBias ? 'error' : ''" :help="validationErrors.cognitiveBias">
           <template #label>
-            2. 是否有认知偏差
+            <span><span style="color: #ff4d4f; margin-right: 4px;">*</span>2. 是否有认知偏差</span>
             <a-tooltip overlay-class-name="review-tooltip">
               <template #title>
                 认知偏差分析（深度反思）<br />
@@ -136,9 +167,9 @@
             :rows="6"
           />
         </a-form-item>
-        <a-form-item required>
+        <a-form-item :validate-status="validationErrors.improvementMeasures ? 'error' : ''" :help="validationErrors.improvementMeasures">
           <template #label>
-            3. 改进措施
+            <span><span style="color: #ff4d4f; margin-right: 4px;">*</span>3. 改进措施</span>
             <a-tooltip overlay-class-name="review-tooltip">
               <template #title>
                 比如：<br />
@@ -163,6 +194,7 @@
 <script setup>
 import { computed, reactive, watch } from 'vue';
 import { QuestionCircleOutlined } from '@ant-design/icons-vue';
+import { message } from 'ant-design-vue';
 import dayjs from 'dayjs';
 
 const props = defineProps({
@@ -205,6 +237,7 @@ watch(
   () => props.record,
   (newRecord) => {
     if (newRecord) {
+      Object.keys(validationErrors).forEach(key => validationErrors[key] = '');
       // Load existing review data if available, otherwise empty
       formState.isSystemCompliant = newRecord.isSystemCompliant || '';
       formState.cognitiveBias = newRecord.cognitiveBias || '';
@@ -286,12 +319,49 @@ watch(
   { immediate: true }
 );
 
+const validationErrors = reactive({
+  isSystemCompliant: '',
+  cognitiveBias: '',
+  improvementMeasures: ''
+});
+
+const clearFieldError = (field) => {
+  if (validationErrors[field]) validationErrors[field] = '';
+};
+
+const validateForm = () => {
+  Object.keys(validationErrors).forEach(key => validationErrors[key] = '');
+  let isValid = true;
+
+  if (!formState.isSystemCompliant || !formState.isSystemCompliant.trim()) {
+    validationErrors.isSystemCompliant = '请填写是否符合系统';
+    isValid = false;
+  }
+  if (!formState.cognitiveBias || !formState.cognitiveBias.trim()) {
+    validationErrors.cognitiveBias = '请填写是否有认知偏差';
+    isValid = false;
+  }
+  if (!formState.improvementMeasures || !formState.improvementMeasures.trim()) {
+    validationErrors.improvementMeasures = '请填写改进措施';
+    isValid = false;
+  }
+  return isValid;
+};
+
+watch(() => formState.isSystemCompliant, () => clearFieldError('isSystemCompliant'));
+watch(() => formState.cognitiveBias, () => clearFieldError('cognitiveBias'));
+watch(() => formState.improvementMeasures, () => clearFieldError('improvementMeasures'));
+
 const handleCancel = () => {
   emit('update:open', false);
 };
 
 const handleOk = () => {
   if (props.saving) return;
+  if (!validateForm()) {
+    message.error('请填写完整的复盘信息');
+    return;
+  }
   emit('submit', { ...formState, id: props.record.id });
 };
 
@@ -368,7 +438,7 @@ const formatMood = (mood) => {
     anxious: '焦虑',
     impulsive: '冲动',
     regret: '后悔',
-    fear: '恐慌'
+    fear: '恐惧'
   };
   return map[normalizedMood] || mood || '--';
 };
@@ -406,5 +476,76 @@ const formatMood = (mood) => {
 :deep(.news-content ol), :deep(.news-content ul) {
   padding-left: 20px;
   margin: 8px 0;
+}
+
+.operation-detail {
+  border: 1px solid #f0f0f0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.detail-row {
+  display: flex;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.detail-row:last-child {
+  border-bottom: none;
+}
+
+.detail-item {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  min-height: auto;
+}
+
+.detail-item:not(:last-child) {
+  border-right: 1px solid #f0f0f0;
+}
+
+.detail-item.full {
+  border-right: none;
+}
+
+.detail-label {
+  width: 72px;
+  flex-shrink: 0;
+  color: #8c8c8c;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.detail-value {
+  color: #262626;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.operation-detail :deep(.ant-tag) {
+  margin: 0;
+}
+
+.logic-block {
+  margin-top: 16px;
+}
+
+.logic-block .detail-label {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.logic-content {
+  padding: 12px;
+  background: #fafafa;
+  border: 1px solid #f0f0f0;
+  border-radius: 6px;
+  color: #595959;
+  font-size: 13px;
+  line-height: 1.6;
 }
 </style>

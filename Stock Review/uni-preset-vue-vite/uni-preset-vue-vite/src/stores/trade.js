@@ -12,7 +12,9 @@ import {
   deleteTradeBySymbol,
   deleteTradeById,
   getMarketOverview,
-  getRealTimeQuote
+  getRealTimeQuote,
+  getCommissionPreference,
+  updateCommissionPreference
 } from '@/api/index';
 import { normalizeSymbol, buildSymbolAliases } from '@/utils/stock';
 
@@ -25,6 +27,11 @@ export const useTradeStore = defineStore('trade', () => {
   const assetsSummary = ref(null); // 资产概览
   const loading = ref(false);
   const marketOverview = ref(null); // 大盘行情
+  const commissionPreference = ref({
+    CN: { mode: 'rate', rate: 5, amount: 0 },
+    HK: { mode: 'rate', rate: 5, amount: 0 },
+    US: { mode: 'rate', rate: 5, amount: 0 }
+  }); // 按市场保存的手续费偏好
 
   const hasAssetsSummary = computed(() => {
     return !!(assetsSummary.value && assetsSummary.value.totalAssets !== null && assetsSummary.value.totalAssets !== undefined);
@@ -380,6 +387,15 @@ export const useTradeStore = defineStore('trade', () => {
           ? Number(h.avgCost) * Number(h.quantity)
           : null;
 
+        const lastTradeDateTimestamp = h.lastTradeDate
+          ? dayjs(h.lastTradeDate).valueOf()
+          : (trades.value || [])
+              .filter(t => normalizeSymbol(t.symbol) === normalizeSymbol(h.symbol))
+              .reduce((max, t) => {
+                const ts = t.timestamp || (t.date ? dayjs(t.date).valueOf() : 0);
+                return ts > max ? ts : max;
+              }, 0) || null;
+
         const unrealizedProfit = h.unrealizedProfit !== null && h.unrealizedProfit !== undefined
           ? Number(h.unrealizedProfit)
           : (
@@ -419,7 +435,8 @@ export const useTradeStore = defineStore('trade', () => {
           positionRatio: h.positionRatio,
           positionPercent: h.positionPercent,
           marketTag: marketInfo?.text,
-          marketTagColor: marketInfo?.color
+          marketTagColor: marketInfo?.color,
+          lastTradeDate: lastTradeDateTimestamp || null
         };
       });
     }
@@ -443,7 +460,7 @@ export const useTradeStore = defineStore('trade', () => {
       const item = map[trade.symbol];
       const qty = Number(trade.quantity);
       const price = Number(trade.price);
-      const fee = Number(trade.fee || 0);
+      const fee = Number(trade.commission || 0);
       
       if (!item.cumulativeProfit) item.cumulativeProfit = 0;
 
@@ -589,7 +606,7 @@ export const useTradeStore = defineStore('trade', () => {
       
       const qty = Number(trade.quantity);
       const price = Number(trade.price);
-      const fee = Number(trade.fee || 0);
+      const fee = Number(trade.commission || 0);
       
       if (trade.type === 'BUY') {
         const cost = (qty * price) + fee;
@@ -649,16 +666,53 @@ export const useTradeStore = defineStore('trade', () => {
     }
   };
 
+  // Fetch commission preference by market
+  const fetchCommissionPreference = async () => {
+    try {
+      const res = await getCommissionPreference();
+      if (res) {
+        commissionPreference.value = {
+          CN: res.CN || commissionPreference.value.CN,
+          HK: res.HK || commissionPreference.value.HK,
+          US: res.US || commissionPreference.value.US
+        };
+      }
+      return commissionPreference.value;
+    } catch (e) {
+      console.error('Failed to fetch commission preference:', e);
+      return commissionPreference.value;
+    }
+  };
+
+  // Save commission preference for a market
+  const saveCommissionPreference = async (market, payload) => {
+    try {
+      const res = await updateCommissionPreference({ market, ...payload });
+      if (res) {
+        commissionPreference.value[market] = {
+          mode: res.mode || payload.mode,
+          rate: res.rate ?? payload.rate ?? 5,
+          amount: res.amount ?? payload.amount ?? 0,
+          updatedAt: res.updatedAt || new Date().toISOString()
+        };
+      }
+      return res;
+    } catch (e) {
+      console.error('Failed to save commission preference:', e);
+      throw e;
+    }
+  };
+
   let pollingInterval = null;
 
   const startPolling = () => {
     if (pollingInterval) return;
     
-    // Poll every 60 seconds
+    // Poll every 180 seconds to align with backend market overview cache TTL (3 min)
     pollingInterval = setInterval(() => {
       loadTrades();
       fetchMarketOverview();
-    }, 60000);
+    }, 180000);
   };
 
   const stopPolling = () => {
@@ -693,6 +747,9 @@ export const useTradeStore = defineStore('trade', () => {
     holdingsMarketValue,
     totalHoldingsCount,
     marketOverview,
+    commissionPreference,
+    fetchCommissionPreference,
+    saveCommissionPreference,
     fetchMarketOverview,
     fetchRealTimeQuote,
     startPolling,

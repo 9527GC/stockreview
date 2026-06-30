@@ -102,8 +102,8 @@
               <a-range-picker v-model:value="dateRange" size="small" style="width: 220px" @change="handleRangeChange" />
             </div>
           </div>
-          <div v-if="chartData.length === 0" style="padding: 100px; text-align: center; color: #999;">
-            正在加载图表数据...
+          <div v-if="chartData.length === 0" style="padding: 90px 0;">
+            <a-empty description="暂无持仓" />
           </div>
           <div v-else>
             <ProfitChart :data="chartData" style="height: 281px; width: 100%;" />
@@ -122,18 +122,31 @@
     <!-- Holdings Table -->
     <a-card :bordered="false" style="margin-top: 16px" :body-style="{ padding: '24px' }">
       <div class="table-operator" style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center;">
-        <span style="font-size: 16px; font-weight: 500; color: rgba(0,0,0,0.85);">持仓明细</span>
+        <div style="display: flex; align-items: center; gap: 16px;">
+          <span style="font-size: 16px; font-weight: 500; color: rgba(0,0,0,0.85);">持仓明细</span>
+          <a-radio-group
+            v-model:value="marketFilter"
+            class="market-filter-group"
+            @change="handleMarketChange"
+          >
+            <a-radio-button value="all">全部</a-radio-button>
+            <a-radio-button value="CN">A股</a-radio-button>
+            <a-radio-button value="HK">港股</a-radio-button>
+            <a-radio-button value="US">美股</a-radio-button>
+          </a-radio-group>
+        </div>
         <a-button @click="showHistoryModal">
           <template #icon><HistoryOutlined /></template>
           查看历史持仓
         </a-button>
       </div>
-      <a-table 
-        :columns="columns" 
-        :data-source="sortedHoldings" 
-        :row-key="record => record.symbol" 
-        :pagination="{ pageSize: 5 }"
+      <a-table
+        :columns="columns"
+        :data-source="sortedHoldings"
+        :row-key="record => record.symbol"
+        :pagination="holdingsPagination"
         :scroll="{ x: 1000 }"
+        @change="handlePaginationChange"
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'stock'">
@@ -260,6 +273,9 @@ const dateRange = ref([dayjs().startOf('month'), dayjs()]);
 const dateShortcut = ref('month');
 const selectedStock = ref({});
 const selectedHolding = ref(null);
+const marketFilter = ref('all');
+const currentPage = ref(1);
+const pageSize = ref(50);
 
 const handleShortcutChange = (e) => {
   const value = e.target.value;
@@ -288,6 +304,24 @@ const getCurrencySymbol = (currency) => {
     'USD': '$'
   };
   return map[currency] || '¥';
+};
+
+const getHoldingMarket = (record) => {
+  const symbol = String(record.symbol || '').toUpperCase();
+  const tag = record.marketTag;
+  const currency = record.currency;
+  if (tag === 'HK' || currency === 'HKD' || symbol.endsWith('.HK')) return 'HK';
+  if (tag === 'US' || currency === 'USD' || symbol.endsWith('.US')) return 'US';
+  return 'CN';
+};
+
+const handleMarketChange = () => {
+  currentPage.value = 1;
+};
+
+const handlePaginationChange = (pagination) => {
+  currentPage.value = pagination.current || 1;
+  pageSize.value = pagination.pageSize || 50;
 };
 
 const columns = [
@@ -361,21 +395,50 @@ const columns = [
   { title: '操作', key: 'action', align: 'center', width: 110, fixed: 'right' },
 ];
 
-const sortedHoldings = computed(() => {
-    return [...store.holdings].sort((a, b) => (b.cumulativeProfit ?? -Infinity) - (a.cumulativeProfit ?? -Infinity));
+const filteredHoldings = computed(() => {
+  if (marketFilter.value === 'all') return store.holdings;
+  return store.holdings.filter(h => getHoldingMarket(h) === marketFilter.value);
 });
 
+const sortedHoldings = computed(() => {
+  return [...filteredHoldings.value].sort((a, b) => {
+    const at = a.lastTradeDate ?? 0;
+    const bt = b.lastTradeDate ?? 0;
+    if (bt !== at) return bt - at;
+    return (b.cumulativeProfit ?? -Infinity) - (a.cumulativeProfit ?? -Infinity);
+  });
+});
+
+const holdingsPagination = computed(() => ({
+  current: currentPage.value,
+  pageSize: pageSize.value,
+  total: filteredHoldings.value.length,
+  showSizeChanger: true,
+  showTotal: total => `共 ${total} 条`
+}));
+
 const todayStr = computed(() => dayjs().format('YYYY-MM-DD'));
+
+const handleVisibilityChange = () => {
+  if (document.hidden) {
+    store.stopPolling();
+  } else {
+    store.fetchMarketOverview();
+    store.startPolling();
+  }
+};
 
 onMounted(async () => {
   await store.loadTrades();
   store.fetchMarketOverview();
   store.startPolling();
   fetchChartData();
+  document.addEventListener('visibilitychange', handleVisibilityChange);
 });
 
 onUnmounted(() => {
   store.stopPolling();
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
 });
 
 const handleTradeSuccess = () => {
@@ -564,5 +627,21 @@ const fetchChartData = async () => {
   border: 0 !important;
   height: 0 !important;
   line-height: 0 !important;
+}
+
+/* 市场筛选单选按钮组 —— 统一主题蓝，首项去除左侧阴影避免双边框 */
+.market-filter-group :deep(.ant-radio-button-wrapper) {
+  min-width: 56px;
+  text-align: center;
+  padding: 0 14px;
+}
+
+.market-filter-group :deep(.ant-radio-button-wrapper-checked) {
+  border-color: #1890ff;
+  color: #1890ff;
+}
+
+.market-filter-group :deep(.ant-radio-button-wrapper:first-child.ant-radio-button-wrapper-checked) {
+  box-shadow: none;
 }
 </style>

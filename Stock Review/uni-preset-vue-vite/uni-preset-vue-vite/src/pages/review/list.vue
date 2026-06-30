@@ -139,7 +139,8 @@ const searchSymbol = ref('');
 const searchDate = ref(null);
 const currentPriceMap = ref({});
 const selectedTradeType = ref(null);
-const defaultPageSize = 10;
+const selectedReviewStatus = ref(null);
+const defaultPageSize = 50;
 
 const buildQueryParams = (overrides = {}) => ({
   page: 1,
@@ -147,6 +148,7 @@ const buildQueryParams = (overrides = {}) => ({
   symbol: searchSymbol.value || undefined,
   date: searchDate.value ? searchDate.value.format('YYYY-MM-DD') : undefined,
   type: selectedTradeType.value || undefined,
+  reviewStatus: selectedReviewStatus.value || undefined,
   ...overrides
 });
 
@@ -158,6 +160,7 @@ const handleReset = () => {
   searchSymbol.value = '';
   searchDate.value = null;
   selectedTradeType.value = null;
+  selectedReviewStatus.value = null;
   store.loadTrades({
     page: 1,
     pageSize: tablePagination.value.pageSize || defaultPageSize
@@ -194,8 +197,11 @@ const handleTableChange = (pagination, filters) => {
   const nextPage = pagination?.current || 1;
   const nextPageSize = pagination?.pageSize || tablePagination.value.pageSize || defaultPageSize;
   const nextType = Array.isArray(filters?.type) ? (filters.type[0] || null) : (filters?.type || null);
-  const filterChanged = nextType !== selectedTradeType.value;
+  const rawReviewStatus = Array.isArray(filters?.reviewResult) ? (filters.reviewResult[0] || null) : (filters?.reviewResult || null);
+  const nextReviewStatus = rawReviewStatus === 'all' ? null : rawReviewStatus;
+  const filterChanged = nextType !== selectedTradeType.value || nextReviewStatus !== selectedReviewStatus.value;
   selectedTradeType.value = nextType;
+  selectedReviewStatus.value = nextReviewStatus;
   store.loadTrades(buildQueryParams({
     page: filterChanged ? 1 : nextPage,
     pageSize: nextPageSize
@@ -273,7 +279,19 @@ const columns = [
   { title: '价格/现价', key: 'price', width: 120 },
   { title: '成交额/数量', key: 'marketValue', width: 140 },
   { title: '交易逻辑', key: 'logic', minWidth: 250 },
-  { title: '复盘结果', key: 'reviewResult', minWidth: 250 },
+  {
+    title: '复盘结果',
+    dataIndex: 'reviewResult',
+    key: 'reviewResult',
+    className: 'review-result-filter-cell',
+    minWidth: 250,
+    filters: [
+      { text: '未复盘', value: 'pending' },
+      { text: '已复盘', value: 'reviewed' }
+    ],
+    filterMultiple: false,
+    filteredValue: selectedReviewStatus.value ? [selectedReviewStatus.value] : null
+  },
   { title: '操作', key: 'action', width: 120, fixed: 'right', align: 'center' },
 ];
 
@@ -306,42 +324,62 @@ const formatDate = (date) => {
 
 const normalizeMood = (mood) => String(mood || '').trim().toLowerCase();
 
+const MOOD_TEXT_MAP = {
+  neutral: '中性',
+  calm: '冷静',
+  confident: '自信',
+  anxious: '焦虑',
+  impulsive: '冲动',
+  excited: '兴奋',
+  fear: '恐惧'
+};
+
+const MOOD_STYLE_MAP = {
+  neutral: {
+    color: '#595959',
+    backgroundColor: '#fafafa',
+    border: '1px solid #d9d9d9'
+  },
+  calm: {
+    color: '#0958d9',
+    backgroundColor: '#e6f4ff',
+    border: '1px solid #91caff'
+  },
+  confident: {
+    color: '#531dab',
+    backgroundColor: '#f9f0ff',
+    border: '1px solid #d3adf7'
+  },
+  anxious: {
+    color: '#389e0d',
+    backgroundColor: '#f6ffed',
+    border: '1px solid #b7eb8f'
+  },
+  impulsive: {
+    color: '#c41d7f',
+    backgroundColor: '#fff0f6',
+    border: '1px solid #ffadd2'
+  },
+  excited: {
+    color: '#d46b08',
+    backgroundColor: '#fff7e6',
+    border: '1px solid #ffd591'
+  },
+  fear: {
+    color: '#cf1322',
+    backgroundColor: '#fff1f0',
+    border: '1px solid #ffa39e'
+  }
+};
+
 const formatMood = (mood) => {
   const normalizedMood = normalizeMood(mood);
-  const map = {
-    calm: '冷静',
-    excited: '兴奋',
-    anxious: '焦虑',
-    fear: '恐慌'
-  };
-  return map[normalizedMood] || mood || '--';
+  return MOOD_TEXT_MAP[normalizedMood] || mood || '--';
 };
 
 const getMoodTagStyle = (mood) => {
   const normalizedMood = normalizeMood(mood);
-  const map = {
-    calm: {
-      color: '#0958d9',
-      backgroundColor: '#e6f4ff',
-      border: '1px solid #91caff'
-    },
-    excited: {
-      color: '#d46b08',
-      backgroundColor: '#fff7e6',
-      border: '1px solid #ffd591'
-    },
-    anxious: {
-      color: '#389e0d',
-      backgroundColor: '#f6ffed',
-      border: '1px solid #b7eb8f'
-    },
-    fear: {
-      color: '#cf1322',
-      backgroundColor: '#fff1f0',
-      border: '1px solid #ffa39e'
-    }
-  };
-  return map[normalizedMood] || {
+  return MOOD_STYLE_MAP[normalizedMood] || {
     color: '#595959',
     backgroundColor: '#fafafa',
     border: '1px solid #d9d9d9'
@@ -426,5 +464,24 @@ const handleTradeSuccess = () => {
   border: 0 !important;
   height: 0 !important;
   line-height: 0 !important;
+}
+
+/* 让复盘结果列的筛选图标紧跟标题文字，不靠到列宽最右侧 */
+:deep(.review-result-filter-cell) {
+  display: flex !important;
+  align-items: center;
+
+  .ant-table-column-sorters {
+    flex: 0 0 auto;
+  }
+
+  .ant-table-filter-trigger {
+    position: static;
+    width: auto;
+    height: auto;
+    padding: 0;
+    margin-left: 4px;
+    transform: none;
+  }
 }
 </style>

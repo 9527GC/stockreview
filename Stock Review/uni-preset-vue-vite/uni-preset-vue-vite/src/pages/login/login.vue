@@ -78,7 +78,7 @@ const formState = reactive({
   username: '',
   password: ''
 })
-const autoLogin = ref(uni.getStorageSync('autoLogin') === 'true')
+const autoLogin = ref(uni.getStorageSync('autoLogin') !== 'false')
 const loading = ref(false)
 const loginBackgroundStyle = appConfig.loginBackgroundUrl
   ? { backgroundImage: `url('${appConfig.loginBackgroundUrl}')` }
@@ -89,6 +89,12 @@ onMounted(() => {
   const storedUsername = uni.getStorageSync('lastUsername');
   if (storedUsername) {
     formState.username = storedUsername;
+  }
+
+  // 勾选了自动登录且已登录时直接进首页
+  const token = uni.getStorageSync('token');
+  if (token && autoLogin.value) {
+    uni.reLaunch({ url: '/pages/assets/index' });
   }
 })
 

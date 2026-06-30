@@ -9,10 +9,14 @@ const MOCK_SUGGESTIONS = [
   { symbol: 'HK09988', name: '阿里巴巴', market: 'HK' }
 ];
 
+const KNOWN_MARKETS = new Set(['SH', 'SZ', 'BJ', 'HK', 'US']);
+
 const normalizeSearchSymbol = (code, market) => {
   if (!code || !market) return null;
   const upperMarket = String(market).toUpperCase();
   const upperCode = String(code).toUpperCase().trim();
+
+  if (!KNOWN_MARKETS.has(upperMarket)) return null;
 
   if (upperMarket === 'SH' || upperMarket === 'SZ' || upperMarket === 'BJ') {
     return `${upperCode}.${upperMarket}`;
@@ -23,7 +27,7 @@ const normalizeSearchSymbol = (code, market) => {
   if (upperMarket === 'US') {
     return `${upperCode}.US`;
   }
-  return `${upperCode}.${upperMarket}`;
+  return null;
 };
 
 const deduplicateSuggestions = (suggestions) => {
@@ -35,6 +39,30 @@ const deduplicateSuggestions = (suggestions) => {
     seen.add(key);
     return true;
   });
+};
+
+const US_EXCHANGES = new Set(['NASDAQ', 'NYSE', 'AMEX', 'ARCA', 'BATS', 'OTCBB', 'OTC', 'PNK', 'US', 'USEX']);
+const US_CLASSIFY = new Set(['USSTOCK', 'OTCBB', 'USEX', 'US', 'US ETF']);
+
+const inferMarketFromEastmoney = (item) => {
+  const jys = String(item.JYS || '').toUpperCase();
+  const classify = String(item.Classify || '').toUpperCase();
+  const typeName = String(item.SecurityTypeName || '');
+
+  if (jys === 'HK' || classify === 'HK') return 'HK';
+
+  if (US_EXCHANGES.has(jys) || US_EXCHANGES.has(classify)) return 'US';
+  if (US_CLASSIFY.has(classify)) return 'US';
+  if (typeName.includes('美') || typeName.includes('粉单')) return 'US';
+
+  if (typeName.includes('沪')) return 'SH';
+  if (typeName.includes('深')) return 'SZ';
+  if (typeName.includes('北')) return 'BJ';
+
+  // A 股兜底：未识别到沪/深/北时归为 SH
+  if (classify === 'ASTOCK') return 'SH';
+
+  return null;
 };
 
 // 腾讯 Smartbox：支持 A 股、港股、美股
@@ -85,11 +113,8 @@ const searchEastmoney = async (keyword) => {
 
   return data.map((item) => {
     const code = item.Code;
-    const marketType = String(item.SecurityTypeName || '');
-    let market = 'SH';
-    if (marketType.includes('深')) market = 'SZ';
-    else if (marketType.includes('港')) market = 'HK';
-    else if (marketType.includes('美')) market = 'US';
+    const market = inferMarketFromEastmoney(item);
+    if (!market) return null;
 
     const symbol = normalizeSearchSymbol(code, market);
     if (!symbol) return null;
