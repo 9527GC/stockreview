@@ -4,6 +4,7 @@ const https = require('https');
 let ratesCache = null;
 let lastUpdate = 0;
 const CACHE_TTL = 3600 * 1000; // 缓存1小时
+const REQUEST_TIMEOUT = 10000; // 10秒超时
 
 const getRates = () => {
   return new Promise((resolve) => {
@@ -12,16 +13,18 @@ const getRates = () => {
       return resolve(ratesCache);
     }
 
+    const defaultRates = ratesCache || { 'CNY': 1, 'USD': 7.2, 'HKD': 0.92 };
+
     // Frankfurter API 已迁移到 .dev 域名
     const url = 'https://api.frankfurter.dev/v1/latest?from=CNY&to=USD,HKD';
 
-    https.get(url, (res) => {
+    const req = https.get(url, (res) => {
       let data = '';
       res.on('data', (chunk) => data += chunk);
       res.on('end', () => {
         try {
           const result = JSON.parse(data);
-          
+
           if (!result || !result.rates) {
             throw new Error('Invalid API response');
           }
@@ -41,12 +44,20 @@ const getRates = () => {
           resolve(newRates);
         } catch (e) {
           console.error('Failed to parse exchange rates:', e);
-          resolve(ratesCache || { 'CNY': 1, 'USD': 7.2, 'HKD': 0.92 }); // 兜底汇率
+          resolve(defaultRates);
         }
       });
-    }).on('error', (e) => {
+    });
+
+    req.setTimeout(REQUEST_TIMEOUT, () => {
+      req.destroy();
+      console.error('Exchange rates request timeout, using fallback rates');
+      resolve(defaultRates);
+    });
+
+    req.on('error', (e) => {
       console.error('Failed to fetch exchange rates:', e);
-      resolve(ratesCache || { 'CNY': 1, 'USD': 7.2, 'HKD': 0.92 });
+      resolve(defaultRates);
     });
   });
 };

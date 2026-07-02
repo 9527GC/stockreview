@@ -67,7 +67,11 @@ const request = (options) => {
           resolve(res.data);
         } else if (res.statusCode === 401) {
           uni.removeStorageSync('token');
-          uni.navigateTo({ url: '/pages/login/login' });
+          const pages = getCurrentPages();
+          const currentRoute = pages.length > 0 ? pages[pages.length - 1].route : '';
+          if (currentRoute !== 'pages/login/login') {
+            uni.navigateTo({ url: '/pages/login/login' });
+          }
           const msg = extractErrorText(res.data) || '登录已失效，请重新登录';
           if (!shouldSilence(options)) {
             uni.showToast({

@@ -51,6 +51,12 @@ const dailyRevenueSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  // 数据来源：cached（缓存）/ realtime（实时计算）/ partial（部分缺失）
+  source: {
+    type: String,
+    enum: ['cached', 'realtime', 'partial'],
+    default: 'cached'
+  },
   // 是否脏数据
   isDirty: {
     type: Boolean,

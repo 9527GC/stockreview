@@ -116,10 +116,10 @@
           <div style="color: #1890ff; font-weight: 600; font-size: 12px; margin-bottom: 8px; display: flex; align-items: center; gap: 4px;">
             关键新闻
           </div>
-          <div 
+          <div
             class="news-content"
             style="font-size: 13px; color: #595959; line-height: 1.6;"
-            v-html="record.news || marketSnapshot?.news"
+            v-html="sanitizedNews"
           ></div>
         </div>
       </div>
@@ -196,6 +196,7 @@ import { computed, reactive, watch } from 'vue';
 import { QuestionCircleOutlined } from '@ant-design/icons-vue';
 import { message } from 'ant-design-vue';
 import dayjs from 'dayjs';
+import { sanitizeHtml } from '@/utils/sanitizeHtml';
 
 const props = defineProps({
   open: Boolean,
@@ -212,6 +213,7 @@ const props = defineProps({
 const emit = defineEmits(['update:open', 'submit']);
 
 const marketSnapshot = computed(() => props.record.marketOverviewSnapshot || props.record.marketOverview || null);
+const sanitizedNews = computed(() => sanitizeHtml(props.record.news || marketSnapshot.value?.news || ''));
 
 const marketData = reactive({
   benchmarkName: '',

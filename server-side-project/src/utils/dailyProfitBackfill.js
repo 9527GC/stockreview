@@ -25,6 +25,12 @@ const getDatesBetween = (startDateStr, endDateStr) => {
   return dates;
 };
 
+const getNextDateStr = (dateStr) => {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0, 10);
+};
+
 const applyTradeToHoldings = (holdings, trade) => {
   const symbol = normalizeSymbol(trade.symbol);
   const qty = Number(trade.quantity) || 0;
@@ -86,7 +92,17 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
   const firstTransferDate = transfers.length > 0 ? dateStrOf(transfers[0].date) : null;
   const earliestDate = [firstTradeDate, firstTransferDate, startDateStr].filter(Boolean).sort()[0];
 
-  const dates = getDatesBetween(earliestDate, todayStr);
+  // P2 增量回填：若已有缓存数据且比 earliestDate 新，从最近一天的下一天开始
+  const lastExisting = await DailyProfit.findOne({ userId }).sort({ date: -1 }).lean();
+  let prevTotalAssets = null;
+  let recomputeStartDate = earliestDate;
+  if (lastExisting && lastExisting.date >= earliestDate) {
+    recomputeStartDate = getNextDateStr(lastExisting.date);
+    prevTotalAssets = Number(lastExisting.totalAssets) || null;
+  }
+
+  // 只生成需要回填的日期
+  const dates = getDatesBetween(recomputeStartDate, todayStr);
   if (dates.length === 0) {
     return { success: true, updatedCount: 0, skippedCount: 0 };
   }
@@ -106,7 +122,6 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
   const currentHoldings = new Map();
   const dailyProfits = [];
   const dailyRevenues = [];
-  let prevTotalAssets = null;
   let tradeIndex = 0;
 
   for (const dateStr of dates) {

@@ -59,10 +59,20 @@ exports.addTransfer = async (req, res) => {
     const rate = RATES[currency] || 1;
     const amountInCNY = amount * rate;
 
-    // OUT 时校验余额是否充足
-    if (type === 'OUT') {
-      const asset = await Asset.findOne({ userId: req.user._id });
-      if (!asset || (asset.cash || 0) < amountInCNY) {
+    // 原子化更新资产：IN 直接增加，OUT 使用 $gte 条件防止透支
+    if (type === 'IN') {
+      await Asset.findOneAndUpdate(
+        { userId: req.user._id },
+        { $inc: { cash: amountInCNY, currentPrincipal: amountInCNY } },
+        { upsert: true, new: true }
+      );
+    } else {
+      const updated = await Asset.findOneAndUpdate(
+        { userId: req.user._id, cash: { $gte: amountInCNY } },
+        { $inc: { cash: -amountInCNY, currentPrincipal: -amountInCNY } },
+        { new: true }
+      );
+      if (!updated) {
         return res.status(400).json({ message: 'Insufficient cash' });
       }
     }
@@ -77,24 +87,12 @@ exports.addTransfer = async (req, res) => {
     });
     await transfer.save();
 
-    // 更新资产中的现金余额 (简单折算为CNY)
-    let asset = await Asset.findOne({ userId: req.user._id });
-    if (!asset) {
-      asset = new Asset({ userId: req.user._id });
+    // 重新计算总资产（现金 + 持仓市值），保持 totalAssets 同步
+    const asset = await Asset.findOne({ userId: req.user._id });
+    if (asset) {
+      asset.totalAssets = (asset.cash || 0) + (asset.holdingsMarketValue || 0);
+      await asset.save();
     }
-
-    if (type === 'IN') {
-      asset.cash = (asset.cash || 0) + amountInCNY;
-      asset.currentPrincipal = (asset.currentPrincipal || 0) + amountInCNY;
-    } else {
-      asset.cash = (asset.cash || 0) - amountInCNY;
-      asset.currentPrincipal = (asset.currentPrincipal || 0) - amountInCNY;
-    }
-
-    // 重新计算总资产 = 现金 + 持仓市值
-    asset.totalAssets = asset.cash + (asset.holdingsMarketValue || 0);
-
-    await asset.save();
 
     await upsertTodayDailyProfit(req.user._id);
 

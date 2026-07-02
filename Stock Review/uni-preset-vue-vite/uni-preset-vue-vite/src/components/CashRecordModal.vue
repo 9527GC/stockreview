@@ -68,13 +68,13 @@ const currentPage = ref(1);
 const pageSize = ref(10);
 
 const paginatedRecords = computed(() => {
-  // 1. 先按时间从新到旧排序
-  const sorted = [...store.transferRecords].sort((a, b) => b.timestamp - a.timestamp);
-  
+  // 1. 先按 date 从新到旧排序
+  const sorted = [...store.transferRecords].sort((a, b) => dayjs(b.date).valueOf() - dayjs(a.date).valueOf());
+
   // 2. 分页切片
   const start = (currentPage.value - 1) * pageSize.value;
   const end = start + pageSize.value;
-  
+
   return sorted.slice(start, end);
 });
 
