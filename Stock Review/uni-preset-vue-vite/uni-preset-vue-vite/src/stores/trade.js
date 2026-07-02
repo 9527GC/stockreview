@@ -157,26 +157,29 @@ export const useTradeStore = defineStore('trade', () => {
   // 计算板块/市场标签逻辑
   const getMarketTag = (symbol, market) => {
     if (!symbol) return null;
-    if (market === 'HK') return { text: 'HK', color: '#fa8c16' }; // 港股 橘黄色
-    if (market === 'US') return { text: 'US', color: '#1890ff' }; // 美股 蓝色
-    
-    // 沪深市场逻辑
-    if (symbol.startsWith('SH')) {
-      if (symbol.startsWith('SH688')) return { text: '科', color: '#f5222d' }; // 科创板
-      if (symbol.startsWith('SH5') || symbol.startsWith('SH51') || symbol.startsWith('SH56') || symbol.startsWith('SH58')) return { text: '基', color: '#f5222d' }; // 基金
+    const upper = String(symbol).toUpperCase();
+    if (market === 'HK' || upper.endsWith('.HK')) return { text: 'HK', color: '#fa8c16' }; // 港股 橘黄色
+    if (market === 'US' || upper.endsWith('.US')) return { text: 'US', color: '#1890ff' }; // 美股 蓝色
+
+    // 沪深市场逻辑（按后缀判断）
+    if (upper.endsWith('.SH')) {
+      const code = upper.replace('.SH', '');
+      if (code.startsWith('688')) return { text: '科', color: '#f5222d' }; // 科创板
+      if (/^5|^51|^56|^58/.test(code)) return { text: '基', color: '#f5222d' }; // 基金
       return { text: 'SH', color: '#f5222d' }; // 沪市主板
     }
-    if (symbol.startsWith('SZ')) {
-      if (symbol.startsWith('SZ300') || symbol.startsWith('SZ301')) return { text: '创', color: '#f5222d' }; // 创业板
-      if (symbol.startsWith('SZ15') || symbol.startsWith('SZ16')) return { text: '基', color: '#f5222d' }; // 基金
+    if (upper.endsWith('.SZ')) {
+      const code = upper.replace('.SZ', '');
+      if (/^300|^301/.test(code)) return { text: '创', color: '#f5222d' }; // 创业板
+      if (/^15|^16/.test(code)) return { text: '基', color: '#f5222d' }; // 基金
       return { text: 'SZ', color: '#f5222d' }; // 深市主板/中小板
     }
-    if (symbol.startsWith('BJ') || /^[48]/.test(symbol.replace(/^[A-Z]+/, ''))) {
+    if (upper.endsWith('.BJ')) {
       return { text: '北', color: '#f5222d' }; // 北交所
     }
-    
-    // 如果 symbol 不带前缀，尝试根据数字规律兜底（或默认为 SH/SZ）
-    const pureCode = symbol.replace(/^[A-Z]+/, '');
+
+    // 如果 symbol 不带前缀，尝试根据数字规律兜底
+    const pureCode = upper.replace(/\.[A-Z]+$/, '');
     if (/^688/.test(pureCode)) return { text: '科', color: '#f5222d' };
     if (/^300|^301/.test(pureCode)) return { text: '创', color: '#f5222d' };
     if (/^6/.test(pureCode)) return { text: 'SH', color: '#f5222d' };
@@ -212,10 +215,14 @@ export const useTradeStore = defineStore('trade', () => {
       lastTradeReviewsParams.value = { ...normalizedParams };
 
       // 1. Fetch from API
+      let tradesRequestFailed = false;
       const [assetsRes, holdingsRes, tradesRes, transfersRes] = await Promise.all([
         getAssetsSummary().catch(() => null),
         getHoldings().catch(() => ({ list: [] })),
-        getTradeReviews(normalizedParams).catch(() => ({ list: [] })),
+        getTradeReviews(normalizedParams).catch(() => {
+          tradesRequestFailed = true;
+          return { list: [] };
+        }),
         getTransfers({ page: 1, pageSize: 100 }).catch(() => {
           transferRecordsRequestFailed.value = true;
           return { list: [] };
@@ -227,8 +234,8 @@ export const useTradeStore = defineStore('trade', () => {
       if (tradesRes) setTradesFromResponse(tradesRes, { current: normalizedParams.page, pageSize: normalizedParams.pageSize });
       if (transfersRes) transferRecords.value = transfersRes.list || [];
 
-      // 2. Fallback to storage if API fails or returns empty
-      if (trades.value.length === 0) {
+      // 2. 仅在 API 请求真实失败时才回退本地缓存
+      if (tradesRequestFailed && trades.value.length === 0) {
         const storedTrades = uni.getStorageSync('stock_review_trades');
         if (storedTrades) {
           trades.value = JSON.parse(storedTrades).filter(t => !!t.symbol);
@@ -242,7 +249,7 @@ export const useTradeStore = defineStore('trade', () => {
       if (transferRecordsRequestFailed.value) {
         transferRecords.value = [];
       }
-      
+
       const storedPrincipal = uni.getStorageSync('stock_review_principal');
       if (storedPrincipal) totalPrincipal.value = Number(storedPrincipal);
 
@@ -462,7 +469,7 @@ export const useTradeStore = defineStore('trade', () => {
       const price = Number(trade.price);
       const fee = Number(trade.commission || 0);
       
-      if (!item.cumulativeProfit) item.cumulativeProfit = 0;
+      if (item.cumulativeProfit == null) item.cumulativeProfit = 0;
 
       if (trade.type === 'BUY') {
         const cost = (qty * price) + fee;
@@ -710,7 +717,7 @@ export const useTradeStore = defineStore('trade', () => {
     
     // Poll every 180 seconds to align with backend market overview cache TTL (3 min)
     pollingInterval = setInterval(() => {
-      loadTrades();
+      loadTrades(lastTradeReviewsParams.value);
       fetchMarketOverview();
     }, 180000);
   };

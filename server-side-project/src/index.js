@@ -13,7 +13,7 @@ if (nodeEnv !== 'test') {
       console.log(`[env] ${envFile} not found, using .env`);
   }
 
-  // Manually read .env file and set environment variables (override existing)
+  // Manually read .env file and set environment variables (do not override existing system env vars)
   if (fs.existsSync(envPath)) {
       const envContent = fs.readFileSync(envPath, 'utf8');
       envContent.split('\n').forEach(line => {
@@ -21,8 +21,8 @@ if (nodeEnv !== 'test') {
           if (match) {
               const key = match[1].trim();
               const value = match[2].trim();
-              if (key) {
-                  process.env[key] = value;  // Override existing values
+              if (key && process.env[key] === undefined) {
+                  process.env[key] = value;
               }
           }
       });
@@ -133,7 +133,10 @@ app.use((err, req, res, next) => {
   if (err.message === 'Not allowed by CORS') {
     return res.status(403).json({ message: 'CORS policy: origin not allowed' });
   }
-  res.status(500).json({ message: 'Internal server error' });
+  const status = err.statusCode || err.status || 500;
+  const isClientError = status >= 400 && status < 500;
+  const message = isClientError ? err.message : 'Internal server error';
+  res.status(status).json({ message });
 });
 
 // Database Connection

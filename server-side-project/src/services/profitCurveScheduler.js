@@ -11,6 +11,9 @@ const User = require('../models/User');
 const { getHistoricalIndexSeries } = require('../utils/marketData');
 const { getRates } = require('../utils/currency');
 const { parseDateInOffset } = require('../utils/datetime');
+const { calculateDilutedPerformance } = require('../utils/cost');
+const { round2 } = require('../utils/pnl');
+const { normalizeSymbol } = require('../utils/symbol');
 const moment = require('moment');
 
 /**
@@ -121,19 +124,34 @@ class ProfitCurveScheduler {
 
       // 获取历史数据
       const startDate = moment(date).subtract(5, 'days').format('YYYY-MM-DD');
-      const benchmarkData = await getHistoricalIndexSeries('000001.SH', startDate, date);
+      const benchmarkData = await getHistoricalIndexSeries({
+        code: 'zs_000001',
+        name: '上证指数',
+        symbol: '000001.SH',
+        startDate,
+        endDate: date
+      });
 
       if (benchmarkData && benchmarkData.length > 0) {
-        // 找到对应日期的数据
-        const dayData = benchmarkData.find(d => d.date === date);
-        
+        // 找到对应日期的数据（返回字段为 snapshotTime / index / price）
+        const dayData = benchmarkData.find(d => {
+          const dStr = String(d.snapshotTime || '').slice(0, 10);
+          return dStr === date;
+        });
+
         if (dayData) {
+          const close = Number(dayData.index ?? dayData.price);
+          const open = Number(dayData.open ?? close);
+          const high = Number(dayData.high ?? close);
+          const low = Number(dayData.low ?? close);
+          const changePercent = Number(dayData.changePercent || 0);
+
           // 计算累计涨跌幅（相对于年初或指定基准）
           const yearStart = moment(date).startOf('year').format('YYYY-MM-DD');
           const yearStartData = await DailyBenchmark.findOne({ date: yearStart });
-          const baseValue = yearStartData ? yearStartData.close : dayData.close;
-          
-          const cumulativeChangePercent = ((dayData.close - baseValue) / baseValue) * 100;
+          const baseValue = yearStartData ? yearStartData.close : close;
+
+          const cumulativeChangePercent = baseValue > 0 ? ((close - baseValue) / baseValue) * 100 : 0;
 
           await DailyBenchmark.findOneAndUpdate(
             { date },
@@ -141,11 +159,11 @@ class ProfitCurveScheduler {
               date,
               symbol: '000001.SH',
               name: '上证指数',
-              open: dayData.open || dayData.close,
-              close: dayData.close,
-              high: dayData.high || dayData.close,
-              low: dayData.low || dayData.close,
-              changePercent: dayData.changePercent || 0,
+              open,
+              close,
+              high,
+              low,
+              changePercent,
               cumulativeChangePercent,
               volume: dayData.volume || 0,
               source: 'tencent',
@@ -397,42 +415,23 @@ class ProfitCurveScheduler {
 
         // 获取持仓详情
         const trades = await Trade.find({ userId: user._id });
+        const rates = await getRates();
+        const perfMap = calculateDilutedPerformance({ trades, rates });
         const holdings = [];
-        
-        // 简化处理：从交易记录构建持仓快照
-        // 实际应该从 Holding 模型获取
-        const holdingMap = new Map();
-        trades.forEach(trade => {
-          if (trade.type === 'BUY') {
-            const key = trade.symbol;
-            const existing = holdingMap.get(key) || { quantity: 0, totalCost: 0 };
-            existing.quantity += trade.quantity;
-            existing.totalCost += trade.price * trade.quantity;
-            holdingMap.set(key, existing);
-          } else if (trade.type === 'SELL') {
-            const key = trade.symbol;
-            const existing = holdingMap.get(key);
-            if (existing) {
-              existing.quantity -= trade.quantity;
-              if (existing.quantity <= 0) {
-                holdingMap.delete(key);
-              }
-            }
-          }
-        });
 
-        holdingMap.forEach((value, symbol) => {
-          const trade = trades.find(t => t.symbol === symbol);
-          if (trade && value.quantity > 0) {
-            holdings.push({
-              symbol,
-              name: trade.name,
-              quantity: value.quantity,
-              avgCost: value.totalCost / value.quantity,
-              marketValue: value.quantity * (trade.price || value.avgCost),
-              currency: trade.currency || 'CNY'
-            });
-          }
+        perfMap.forEach((perf, symbol) => {
+          if (perf.quantity <= 0) return;
+          const trade = trades.find(t => normalizeSymbol(t.symbol) === symbol);
+          const rate = rates[perf.currency] || 1;
+          const marketValue = perf.quantity * (trade?.price || perf.avgCost);
+          holdings.push({
+            symbol,
+            name: perf.name || trade?.name || symbol,
+            quantity: perf.quantity,
+            avgCost: round2(perf.avgCost),
+            marketValue: round2(marketValue * rate),
+            currency: perf.currency || trade?.currency || 'CNY'
+          });
         });
 
         await Snapshot.findOneAndUpdate(

@@ -1,10 +1,24 @@
 const { getQuotes, getMarketOverview } = require('../utils/marketData');
 const { normalizeSymbol } = require('../utils/symbol');
 const { searchStock } = require('../services/stockSearchService');
+const messages = require('../utils/errorMessages');
+
+const MAX_KEYWORD_LENGTH = 20;
+const KEYWORD_RE = /^[a-zA-Z0-9一-龥.\- ]+$/;
 
 exports.search = async (req, res) => {
   try {
-    const { keyword } = req.query;
+    const keyword = String(req.query.keyword || '').trim();
+    if (!keyword) {
+      return res.status(400).json({ message: messages.KEYWORD_REQUIRED });
+    }
+    if (keyword.length > MAX_KEYWORD_LENGTH) {
+      return res.status(400).json({ message: messages.KEYWORD_TOO_LONG });
+    }
+    if (!KEYWORD_RE.test(keyword)) {
+      return res.status(400).json({ message: messages.KEYWORD_INVALID_CHARACTERS });
+    }
+
     const { suggestions, source } = await searchStock(keyword);
 
     res.set('X-Search-Source', source);

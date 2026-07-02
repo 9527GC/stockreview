@@ -235,12 +235,13 @@
 </template>
 
 <script setup>
-import { reactive, watch, ref, nextTick, computed } from 'vue';
+import { reactive, watch, ref, nextTick, computed, onUnmounted } from 'vue';
 import { useTradeStore } from '@/stores/trade';
 import { message } from 'ant-design-vue';
 import { OrderedListOutlined, PictureOutlined, DownOutlined } from '@ant-design/icons-vue';
 import { searchStock } from '@/api/index';
 import dayjs from 'dayjs';
+import { sanitizeHtml } from '@/utils/sanitizeHtml';
 
 const props = defineProps({
   open: Boolean,
@@ -344,14 +345,32 @@ watch(() => props.open, (newVal) => {
       formState.date = t.date ? dayjs(t.date) : dayjs();
       formState.logic = t.logic || '';
       formState.mood = t.mood || 'NEUTRAL';
+
+      // 恢复保存的大盘快照全部字段
+      const savedSnapshot = t.marketOverviewSnapshot || t.marketOverview || {};
+      marketOverview.benchmarkName = savedSnapshot.benchmarkName || '';
+      marketOverview.index = savedSnapshot.index ?? savedSnapshot.price ?? null;
+      marketOverview.change = savedSnapshot.change ?? null;
+      marketOverview.changePercent = savedSnapshot.changePercent ?? null;
+      marketOverview.upCount = savedSnapshot.upCount ?? null;
+      marketOverview.downCount = savedSnapshot.downCount ?? null;
+      marketOverview.flatCount = savedSnapshot.flatCount ?? null;
+      marketOverview.limitUpCount = savedSnapshot.limitUpCount ?? null;
+      marketOverview.limitDownCount = savedSnapshot.limitDownCount ?? null;
+      marketOverview.volume = savedSnapshot.volume ?? null;
+      marketOverview.volumeChangeRatio = savedSnapshot.volumeChangeRatio ?? null;
       marketOverview.news = t.news || '';
-      marketOverview.images = t.marketOverview?.images || [];
+      marketOverview.images = savedSnapshot.images || [];
 
       // 费用回灌
       if (t.feeMode === 'rate' && t.feeRate != null) {
         formState.feeMode = 'rate';
         formState.feeRate = t.feeRate;
         formState.feeAmount = 0;
+      } else if (t.feeMode === 'amount' && (t.feeAmount != null || t.commission != null)) {
+        formState.feeMode = 'amount';
+        formState.feeAmount = t.feeAmount ?? t.commission ?? 0;
+        formState.feeRate = 5;
       } else {
         formState.feeMode = 'amount';
         formState.feeAmount = t.commission || 0;
@@ -450,8 +469,20 @@ const previewVisible = ref(false);
 const previewImage = ref('');
 const savedRange = ref(null);
 const apiStockOptions = ref([]);
+const searchInput = ref('');
 
-const handleSearch = async (val) => {
+const createDebounce = (fn, delay) => {
+  let timer = null;
+  const wrapped = (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), delay);
+  };
+  wrapped.cancel = () => clearTimeout(timer);
+  return wrapped;
+};
+
+const doSearch = async (val) => {
+  searchInput.value = val || '';
   if (!val) {
     apiStockOptions.value = [];
     return;
@@ -471,9 +502,17 @@ const handleSearch = async (val) => {
   }
 };
 
+const handleSearch = createDebounce(doSearch, 300);
+
 const allStockOptions = computed(() => {
+  const keyword = String(searchInput.value || '').trim().toUpperCase();
   if (apiStockOptions.value.length > 0) return apiStockOptions.value;
-  return stockOptions;
+  if (!keyword) return stockOptions;
+  return stockOptions.filter(s =>
+    s.value.toUpperCase().includes(keyword) ||
+    s.name.toUpperCase().includes(keyword) ||
+    (s.pinyin || '').toUpperCase().includes(keyword)
+  );
 });
 
 const saveSelection = () => {
@@ -488,17 +527,18 @@ const saveSelection = () => {
 
 // Sync editor content when marketOverview.news changes externally
 watch(() => marketOverview.news, (newVal) => {
-  if (editorRef.value && newVal !== editorRef.value.innerHTML) {
+  const safeVal = sanitizeHtml(newVal || '');
+  if (editorRef.value && safeVal !== editorRef.value.innerHTML) {
     if (document.activeElement !== editorRef.value) {
-      editorRef.value.innerHTML = newVal;
-    } else if (!editorRef.value.innerHTML && newVal) {
-       editorRef.value.innerHTML = newVal;
+      editorRef.value.innerHTML = safeVal;
+    } else if (!editorRef.value.innerHTML && safeVal) {
+       editorRef.value.innerHTML = safeVal;
     }
   }
 }, { immediate: true });
 
 const onEditorInput = (e) => {
-  marketOverview.news = e.target.innerHTML;
+  marketOverview.news = sanitizeHtml(e.target.innerHTML);
   saveSelection();
 };
 
@@ -515,7 +555,7 @@ const execCommand = (command, value = null) => {
   }
   document.execCommand(command, false, value);
   if (editorRef.value) {
-    marketOverview.news = editorRef.value.innerHTML;
+    marketOverview.news = sanitizeHtml(editorRef.value.innerHTML);
   }
 };
 
@@ -548,17 +588,26 @@ const removeImage = (index) => {
   marketOverview.images.splice(index, 1);
 };
 
-const handleImageUpload = (e) => {
-  const file = e.target.files[0];
+const MAX_IMAGE_SIZE = 2 * 1024 * 1024; // 2MB
+
+const processImageFile = (file) => {
   if (!file) return;
-  
+  if (file.size > MAX_IMAGE_SIZE) {
+    message.warning('图片大小不能超过 2MB');
+    return;
+  }
   const reader = new FileReader();
   reader.onload = (event) => {
     insertImage(event.target.result);
-    // Reset input
-    e.target.value = '';
   };
   reader.readAsDataURL(file);
+};
+
+const handleImageUpload = (e) => {
+  const file = e.target.files[0];
+  processImageFile(file);
+  // Reset input
+  e.target.value = '';
 };
 
 const handlePaste = (e) => {
@@ -567,11 +616,7 @@ const handlePaste = (e) => {
     if (item.type.indexOf('image') !== -1) {
       e.preventDefault();
       const file = item.getAsFile();
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        insertImage(event.target.result);
-      };
-      reader.readAsDataURL(file);
+      processImageFile(file);
       // Only paste the first image found
       break;
     }
@@ -586,7 +631,7 @@ const handleEditorClick = (e) => {
 };
 
 watch(() => [formState.market, formState.date], ([newMarket, newDate]) => {
-  if (!newDate) return;
+  if (!newDate || isEditMode.value) return;
   const dateStr = dayjs(newDate).format('YYYY-MM-DD');
   const todayStr = dayjs().format('YYYY-MM-DD');
   if (dateStr === todayStr) {
@@ -740,10 +785,12 @@ const loadCommissionPreference = async (market) => {
 };
 
 watch(() => formState.market, (newMarket) => {
-  loadCommissionPreference(newMarket);
+  if (!isEditMode.value) {
+    loadCommissionPreference(newMarket);
+  }
 });
 
-const fetchPrice = async (symbol) => {
+const doFetchPrice = async (symbol) => {
   try {
     const res = await store.fetchRealTimeQuote(symbol);
     if (res && res.price) {
@@ -753,6 +800,13 @@ const fetchPrice = async (symbol) => {
     console.error('Failed to fetch price', e);
   }
 };
+
+const fetchPrice = createDebounce(doFetchPrice, 300);
+
+onUnmounted(() => {
+  handleSearch.cancel();
+  fetchPrice.cancel();
+});
 
 const handleCancel = () => {
   emit('update:open', false);

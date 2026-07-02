@@ -21,6 +21,10 @@ build/
 .next/
 out/
 
+# Local documentation drafts (not synced to Gitee)
+docs/INFO/
+docs/test-report/
+
 # IDE and OS files
 .vscode/
 .idea/

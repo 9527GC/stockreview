@@ -54,10 +54,8 @@
     </div>
     
     <div class="footer">
-      <div class="links">
-        <span class="link">Stock Review</span>
-      </div>
       <span class="copyright">Copyright <CopyrightOutlined style="margin: 0 4px;" /> 9527</span>
+      <a class="beian-link" href="http://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">京ICP备2026039497号</a>
     </div>
   </div>
 </template>
@@ -78,7 +76,7 @@ const formState = reactive({
   username: '',
   password: ''
 })
-const autoLogin = ref(uni.getStorageSync('autoLogin') !== 'false')
+const autoLogin = ref(uni.getStorageSync('autoLogin') === 'true')
 const loading = ref(false)
 const loginBackgroundStyle = appConfig.loginBackgroundUrl
   ? { backgroundImage: `url('${appConfig.loginBackgroundUrl}')` }
@@ -264,38 +262,27 @@ const handleForgotPassword = () => {
 .footer {
   margin: 48px 0 24px;
   text-align: center;
-  
-  .links {
-    margin-bottom: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    
-    .link {
-      color: rgba(0, 0, 0, 0.45);
-      font-size: 14px;
-      cursor: pointer;
-      transition: all 0.3s;
-      margin: 0 8px;
-      
-      &:hover {
-        color: rgba(0, 0, 0, 0.65);
-      }
-    }
-    
-    .github-icon {
-      font-size: 14px;
-      color: rgba(0, 0, 0, 0.45);
-      margin: 0 8px;
-    }
-  }
-  
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+
   .copyright {
     color: rgba(0, 0, 0, 0.45);
     font-size: 14px;
     display: flex;
     align-items: center;
     justify-content: center;
+  }
+
+  .beian-link {
+    color: rgba(0, 0, 0, 0.45);
+    font-size: 14px;
+    text-decoration: none;
+    margin-top: 12px;
+
+    &:hover {
+      color: rgba(0, 0, 0, 0.65);
+    }
   }
 }
 

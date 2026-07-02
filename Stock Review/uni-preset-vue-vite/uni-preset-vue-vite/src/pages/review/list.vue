@@ -92,18 +92,18 @@
                </div>
             </template>
             <template v-if="column.key === 'reviewResult'">
-               <div v-if="record.isSystemCompliant || record.cognitiveBias || record.improvementMeasures" style="font-size: 12px; color: #595959;">
-                 <div style="display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px;">
-                   <span style="display: inline-block; padding: 0 4px; border-radius: 2px; background: #e6f7ff; color: #1890ff; margin-right: 4px; font-size: 11px; transform: scale(0.9);">系统</span>{{ record.isSystemCompliant || '--' }}
-                 </div>
-                 <div style="display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px;">
-                   <span style="display: inline-block; padding: 0 4px; border-radius: 2px; background: #fff7e6; color: #fa8c16; margin-right: 4px; font-size: 11px; transform: scale(0.9);">偏差</span>{{ record.cognitiveBias || '--' }}
-                 </div>
-                 <div style="display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis;">
-                   <span style="display: inline-block; padding: 0 4px; border-radius: 2px; background: #f6ffed; color: #52c41a; margin-right: 4px; font-size: 11px; transform: scale(0.9);">改进</span>{{ record.improvementMeasures || '--' }}
-                 </div>
-               </div>
-               <span v-else style="color: #bfbfbf;">未复盘</span>
+              <div v-if="record.isSystemCompliant || record.cognitiveBias || record.improvementMeasures" class="review-result-cell">
+                <div class="review-result-line">
+                  <span class="review-result-tag tag-system">系统</span>{{ record.isSystemCompliant || '--' }}
+                </div>
+                <div class="review-result-line">
+                  <span class="review-result-tag tag-bias">偏差</span>{{ record.cognitiveBias || '--' }}
+                </div>
+                <div class="review-result-line">
+                  <span class="review-result-tag tag-improve">改进</span>{{ record.improvementMeasures || '--' }}
+                </div>
+              </div>
+              <div v-else class="review-result-cell review-result-empty">未复盘</div>
             </template>
           <template v-if="column.key === 'action'">
              <div style="display: flex; gap: 8px; justify-content: center;">
@@ -208,6 +208,8 @@ const handleTableChange = (pagination, filters) => {
   }));
 };
 
+const CONCURRENT_QUOTE_LIMIT = 5;
+
 const loadCurrentPrices = async (records = []) => {
   const symbols = [...new Set(records.map(record => record.symbol).filter(Boolean))];
   if (symbols.length === 0) {
@@ -215,15 +217,22 @@ const loadCurrentPrices = async (records = []) => {
     return;
   }
 
-  const quotes = await Promise.all(
-    symbols.map(async (symbol) => {
+  const results = [];
+  const queue = [...symbols];
+
+  const worker = async () => {
+    while (queue.length > 0) {
+      const symbol = queue.shift();
       const quote = await store.fetchRealTimeQuote(symbol);
       const price = quote?.price !== undefined && quote?.price !== null ? Number(quote.price) : null;
-      return [symbol, Number.isFinite(price) ? price : null];
-    })
-  );
+      results.push([symbol, Number.isFinite(price) ? price : null]);
+    }
+  };
 
-  currentPriceMap.value = quotes.reduce((acc, [symbol, price]) => {
+  const workers = Array.from({ length: Math.min(CONCURRENT_QUOTE_LIMIT, symbols.length) }, worker);
+  await Promise.all(workers);
+
+  currentPriceMap.value = results.reduce((acc, [symbol, price]) => {
     if (price !== null) acc[symbol] = price;
     return acc;
   }, {});
@@ -415,6 +424,57 @@ const handleTradeSuccess = () => {
   display: flex;
   align-items: flex-start;
   gap: 6px;
+}
+
+.review-result-cell {
+  font-size: 12px;
+  color: #595959;
+  line-height: 1.5;
+}
+
+.review-result-line {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 2px;
+}
+
+.review-result-line:last-child {
+  margin-bottom: 0;
+}
+
+.review-result-tag {
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: 2px;
+  margin-right: 4px;
+  font-size: 11px;
+  transform: scale(0.9);
+  transform-origin: left center;
+}
+
+.tag-system {
+  background: #e6f7ff;
+  color: #1890ff;
+}
+
+.tag-bias {
+  background: #fff7e6;
+  color: #fa8c16;
+}
+
+.tag-improve {
+  background: #f6ffed;
+  color: #52c41a;
+}
+
+.review-result-empty {
+  color: #bfbfbf;
+  min-height: 58px;
+  display: flex;
+  align-items: center;
 }
 
 .logic-mood-tag {

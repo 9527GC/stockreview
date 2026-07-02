@@ -46,10 +46,10 @@ const dailyProfitSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
-  // 数据来源：cached（缓存）/ realtime（实时计算）
+  // 数据来源：cached（缓存）/ realtime（实时计算）/ partial（部分缺失）
   source: {
     type: String,
-    enum: ['cached', 'realtime'],
+    enum: ['cached', 'realtime', 'partial'],
     default: 'cached'
   },
   createdAt: {
