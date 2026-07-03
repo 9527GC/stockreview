@@ -30,10 +30,15 @@ exports.search = async (req, res) => {
 
 exports.getOverview = async (req, res) => {
   try {
-    const { date } = req.query;
-    const data = await getMarketOverview({ date });
+    const { date, forceRefresh } = req.query;
+    console.log(`[MarketController] GET /api/market/overview date=${date || 'today'} forceRefresh=${forceRefresh || 'false'}`);
+    const data = await getMarketOverview({ date, forceRefresh: forceRefresh === 'true' });
+    const cnItem = data.find((item) => item.market === 'CN');
+    const hasBreadth = cnItem && cnItem.upCount !== null && cnItem.volume !== null;
+    console.log(`[MarketController] GET /api/market/overview returned ${data.length} items, CN breadth=${hasBreadth}, first item keys=${Object.keys(cnItem || {}).join(',')}`);
     res.json({ list: data });
   } catch (error) {
+    console.error('[MarketController] GET /api/market/overview failed:', error);
     res.status(500).json({ message: error.message });
   }
 };

@@ -412,7 +412,7 @@ exports.getReviews = async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize) || 20));
-    const { symbol, sort, date, include, type, reviewStatus } = req.query;
+    const { symbol, sort, date, startDate, endDate, include, type, reviewStatus } = req.query;
     const query = { userId: req.user._id };
     if (symbol) query.symbol = symbol;
     if (type) query.type = String(type).trim().toUpperCase();
@@ -437,6 +437,17 @@ exports.getReviews = async (req, res) => {
       const start = parseDateInOffset(`${d} 00:00:00`, 480);
       const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
       query.date = { $gte: start, $lt: end };
+    } else if (startDate || endDate) {
+      const dateRange = {};
+      if (startDate) {
+        const s = String(startDate).slice(0, 10);
+        dateRange.$gte = parseDateInOffset(`${s} 00:00:00`, 480);
+      }
+      if (endDate) {
+        const e = String(endDate).slice(0, 10);
+        dateRange.$lte = parseDateInOffset(`${e} 23:59:59`, 480);
+      }
+      query.date = dateRange;
     }
 
     const sortOpt = String(sort || 'date_desc');

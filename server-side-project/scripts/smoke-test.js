@@ -1,11 +1,12 @@
 const http = require('http');
 
-const BASE = 'http://localhost:3002';
+const PORT = process.env.PORT || 3000;
+const BASE = `http://localhost:${PORT}`;
 
 const request = (method, path, data, token) => new Promise((resolve, reject) => {
   const options = {
     hostname: 'localhost',
-    port: 3002,
+    port: PORT,
     path,
     method,
     headers: {
@@ -119,10 +120,25 @@ async function main() {
   // 16. 搜索关键字校验
   results.push({ case: 'market search validation', ...(await request('GET', '/api/market/search?keyword=' + encodeURIComponent('<script>'), token)) });
 
-  // 17. 登出
+  // 17. 大盘概览 A 股全市场指标
+  const overviewRes = await request('GET', '/api/market/overview', null, token);
+  const cnIndex = overviewRes.body?.list?.find(item => item.market === 'CN');
+  const hasCnBreadth = cnIndex && cnIndex.upCount !== null && cnIndex.volume !== null;
+  results.push({
+    case: 'market overview CN breadth',
+    status: overviewRes.status,
+    body: {
+      items: overviewRes.body?.list?.length,
+      hasCnBreadth,
+      upCount: cnIndex?.upCount,
+      volume: cnIndex?.volume
+    }
+  });
+
+  // 18. 登出
   results.push({ case: 'logout', ...(await request('POST', '/api/auth/logout', {}, token)) });
 
-  // 18. 登出后 token 失效
+  // 19. 登出后 token 失效
   results.push({ case: 'token revoked', ...(await request('GET', '/api/assets/summary', null, token)) });
 
   const failed = results.filter(r => {
@@ -142,6 +158,7 @@ async function main() {
     if (r.case === 'sell HK') return r.status !== 201;
     if (r.case === 'history holding profitRate') return !r.body.nonZero;
     if (r.case === 'market search validation') return r.status !== 400;
+    if (r.case === 'market overview CN breadth') return r.status !== 200 || !r.body.hasCnBreadth;
     if (r.case === 'logout') return r.status !== 200;
     if (r.case === 'token revoked') return r.status !== 401;
     return false;

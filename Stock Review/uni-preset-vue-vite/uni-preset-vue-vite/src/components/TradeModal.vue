@@ -325,7 +325,7 @@ const handleFeeModeChange = ({ key }) => {
 };
 
 const volumeLabel = computed(() => {
-  return formState.market === 'CN' ? 'A股全市成交' : '成交量';
+  return formState.market === 'CN' ? 'A股全市成交额' : '成交额';
 });
 
 watch(() => props.open, (newVal) => {
@@ -435,10 +435,15 @@ const formatOverviewVolume = (value) => {
   const number = toFiniteNumber(value);
   if (number === null) return '--';
 
-  // Compatible with both raw volume values and already-normalized "亿" snapshots.
-  const volumeInYi = Math.abs(number) >= 1000 ? number / 100000000 : number;
-  const digits = Math.abs(volumeInYi) >= 1 ? 2 : 4;
-  return `${volumeInYi.toFixed(digits)}亿`;
+  // value 单位为"元"，统一格式化为 亿/万亿。
+  const abs = Math.abs(number);
+  if (abs >= 1e12) {
+    return `${(number / 1e12).toFixed(2)}万亿`;
+  }
+  if (abs >= 1e8) {
+    return `${(number / 1e8).toFixed(2)}亿`;
+  }
+  return `${(number / 1e4).toFixed(2)}万`;
 };
 
 const formatOverviewValue = (value, digits = 2, suffix = '') => {

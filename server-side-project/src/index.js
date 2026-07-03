@@ -81,7 +81,8 @@ const limiter = rateLimit({
   max: process.env.RATE_LIMIT_MAX || 500,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { message: 'Too many requests, please try again later' }
+  message: { message: 'Too many requests, please try again later' },
+  skip: (req) => req.path.startsWith('/market/') || req.path === '/market'
 });
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,

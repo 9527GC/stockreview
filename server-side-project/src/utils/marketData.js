@@ -1,5 +1,8 @@
 const https = require('https');
 const http = require('http');
+const path = require('path');
+const { spawn } = require('child_process');
+const axios = require('axios');
 const iconv = require('iconv-lite');
 const MarketDailySnapshot = require('../models/MarketDailySnapshot');
 const { getDateStringInOffset } = require('./datetime');
@@ -10,7 +13,7 @@ const SOHU_HISTORY_API_URL = 'https://q.stock.sohu.com/hisHq?code=';
 const TENCENT_HISTORY_API_URL = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=';
 const EASTMONEY_QUOTE_API_URL = 'https://push2.eastmoney.com/api/qt/clist/get';
 const DEFAULT_REQUEST_HEADERS = {
-  'User-Agent': 'Mozilla/5.0',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
   'Accept': 'application/json,text/plain,*/*'
 };
 
@@ -140,6 +143,11 @@ const requestText = (url, options = {}, redirectCount = 0) => new Promise((resol
     res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
   });
   req.on('error', reject);
+  if (options.timeout && Number.isFinite(options.timeout)) {
+    req.setTimeout(options.timeout, () => {
+      req.destroy(new Error(`Request timeout after ${options.timeout}ms: ${url}`));
+    });
+  }
 });
 
 const fetchJson = (url, options = {}) => new Promise((resolve, reject) => {
@@ -321,13 +329,14 @@ const saveAshareDailySnapshot = async (date, stats) => {
   if (!stats || typeof stats !== 'object') return null;
 
   const totalVolume = toFiniteOrNull(stats.totalVolume);
+  const totalAmount = toFiniteOrNull(stats.totalAmount);
   const upCount = toFiniteOrNull(stats.upCount);
   const downCount = toFiniteOrNull(stats.downCount);
   const flatCount = toFiniteOrNull(stats.flatCount);
   const limitUpCount = toFiniteOrNull(stats.limitUpCount);
   const limitDownCount = toFiniteOrNull(stats.limitDownCount);
 
-  const hasAny = [totalVolume, upCount, downCount, flatCount, limitUpCount, limitDownCount]
+  const hasAny = [totalVolume, totalAmount, upCount, downCount, flatCount, limitUpCount, limitDownCount]
     .some((value) => value !== null);
   if (!hasAny) return null;
 
@@ -335,6 +344,7 @@ const saveAshareDailySnapshot = async (date, stats) => {
     const existing = await MarketDailySnapshot.findOne({ date: dateStr });
     if (existing) {
       existing.totalVolume = totalVolume ?? existing.totalVolume;
+      existing.totalAmount = totalAmount ?? existing.totalAmount;
       existing.upCount = upCount ?? existing.upCount;
       existing.downCount = downCount ?? existing.downCount;
       existing.flatCount = flatCount ?? existing.flatCount;
@@ -346,6 +356,7 @@ const saveAshareDailySnapshot = async (date, stats) => {
     return await MarketDailySnapshot.create({
       date: dateStr,
       totalVolume,
+      totalAmount,
       upCount,
       downCount,
       flatCount,
@@ -361,9 +372,9 @@ const saveAshareDailySnapshot = async (date, stats) => {
 };
 
 /**
- * 获取指定日期之前最近一个交易日的 A 股全市成交量
+ * 获取指定日期之前最近一个交易日的 A 股全市成交金额
  */
-const getPreviousAshareTotalVolume = async (beforeDate = new Date()) => {
+const getPreviousAshareTotalAmount = async (beforeDate = new Date()) => {
   // 按北京时间（UTC+8）确定日期
   const targetDate = getDateStringInOffset(480, beforeDate);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) return null;
@@ -371,11 +382,11 @@ const getPreviousAshareTotalVolume = async (beforeDate = new Date()) => {
   try {
     const record = await MarketDailySnapshot.findOne({
       date: { $lt: targetDate },
-      totalVolume: { $gt: 0 }
+      totalAmount: { $gt: 0 }
     }).sort({ date: -1 });
-    return record ? record.totalVolume : null;
+    return record ? record.totalAmount : null;
   } catch (error) {
-    console.error('[MarketData] Failed to get previous A-share total volume:', error);
+    console.error('[MarketData] Failed to get previous A-share total amount:', error);
     return null;
   }
 };
@@ -385,8 +396,8 @@ const getPreviousAshareTotalVolume = async (beforeDate = new Date()) => {
 const getBeijingDateString = (date = new Date()) => getDateStringInOffset(480, date);
 
 const marketOverviewCache = new Map();
-const MARKET_OVERVIEW_CACHE_TTL_MS = 3 * 60 * 1000;
-const MARKET_OVERVIEW_STALE_TTL_MS = 15 * 60 * 1000;
+const MARKET_OVERVIEW_CACHE_TTL_MS = 10 * 60 * 1000;
+const MARKET_OVERVIEW_STALE_TTL_MS = 30 * 60 * 1000;
 
 const getCacheKey = (dateStr) => `market:overview:${dateStr}`;
 
@@ -426,7 +437,7 @@ const getMarketOverviewForDate = async (dateStr) => {
   ]);
 
   const marketMetrics = daily ? {
-    volume: daily.totalVolume,
+    volume: daily.totalAmount ?? daily.totalVolume,
     volumeChangeRatio: null,
     upCount: daily.upCount,
     downCount: daily.downCount,
@@ -470,11 +481,17 @@ const inferLimitThreshold = ({ symbol, name }) => {
 const fetchAshareBreadthStats = async () => {
   // 沪深京 A 股全市场；m:0 上海主板/科创板，m:1 深圳主板/创业板，m:1+t:37 覆盖深圳其他板块
   const A_SHARE_FS = 'm:0+t:6,m:0+t:80,m:0+t:81+s:2048,m:1+t:2,m:1+t:23,m:1+t:37';
-  const PAGE_SIZE = 100;
+  const PAGE_SIZE = 5000;
+  const MAX_RETRIES = 3;
+  const BASE_DELAY_MS = 500;
+  const PAGE_DELAY_MS = 200;
+  const REQUEST_TIMEOUT_MS = 20000;
 
-  const buildUrl = (pn) => `${EASTMONEY_QUOTE_API_URL}?${new URLSearchParams({
+  const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+  const buildUrl = (pn, pz) => `${EASTMONEY_QUOTE_API_URL}?${new URLSearchParams({
     pn: String(pn),
-    pz: String(PAGE_SIZE),
+    pz: String(pz),
     po: '1',
     np: '1',
     ut: 'bd1d9ddb04089700cf9c27f6f7426281',
@@ -482,68 +499,79 @@ const fetchAshareBreadthStats = async () => {
     invt: '2',
     fid: 'f3',
     fs: A_SHARE_FS,
-    // f3: 涨跌幅(%), f5: 成交量(手), f12: 代码, f14: 名称
-    fields: 'f3,f5,f12,f14'
+    // f3: 涨跌幅(%), f5: 成交量(手), f6: 成交金额(元), f12: 代码, f14: 名称
+    fields: 'f3,f5,f6,f12,f14'
   })}`;
 
-  const fetchPage = async (pn) => {
-    const payload = await fetchJson(buildUrl(pn), {
-      headers: { Referer: 'https://quote.eastmoney.com/' }
-    });
-    const rows = Array.isArray(payload?.data?.diff) ? payload.data.diff : [];
-    const total = Number(payload?.data?.total) || rows.length;
-    return { rows, total, pn };
+  const fetchPage = async (pn, pz, attempt = 1) => {
+    try {
+      const response = await axios.get(buildUrl(pn, pz), {
+        timeout: REQUEST_TIMEOUT_MS,
+        maxRedirects: 5,
+        headers: {
+          ...DEFAULT_REQUEST_HEADERS,
+          Referer: 'https://quote.eastmoney.com/',
+          Accept: 'application/json,text/plain,*/*'
+        },
+        // 让 axios 使用更浏览器化的 TLS 行为；不强制自定义 agent
+        httpsAgent: new https.Agent({ keepAlive: false })
+      });
+      const payload = response.data;
+      if (payload && payload.rc !== undefined && payload.rc !== 0) {
+        throw new Error(`Eastmoney rc=${payload.rc} msg=${payload.msg || ''}`);
+      }
+      const rows = Array.isArray(payload?.data?.diff) ? payload.data.diff : [];
+      const total = Number(payload?.data?.total);
+      return {
+        rows,
+        total: Number.isFinite(total) ? total : rows.length
+      };
+    } catch (error) {
+      if (attempt < MAX_RETRIES) {
+        const delay = BASE_DELAY_MS * (2 ** (attempt - 1));
+        console.warn(`[MarketData] A-share breadth page ${pn} attempt ${attempt} failed, retry in ${delay}ms: ${error.message}`);
+        await sleep(delay);
+        return fetchPage(pn, pz, attempt + 1);
+      }
+      throw error;
+    }
   };
 
-  const promisePool = async (items, concurrency, handler) => {
-    const results = new Array(items.length);
-    let index = 0;
-    const worker = async () => {
-      while (index < items.length) {
-        const currentIndex = index++;
-        results[currentIndex] = await handler(items[currentIndex]);
-      }
-    };
-    const workers = Array.from({ length: Math.min(concurrency, items.length) }, worker);
-    await Promise.all(workers);
-    return results;
-  };
+  const emptyResult = () => ({
+    upCount: null,
+    downCount: null,
+    flatCount: null,
+    limitUpCount: null,
+    limitDownCount: null,
+    totalVolume: null,
+    totalAmount: null
+  });
 
   try {
-    const firstPage = await fetchPage(1);
+    const firstPage = await fetchPage(1, PAGE_SIZE);
+    console.log(`[MarketData] A-share breadth first page: ${firstPage.rows.length}/${firstPage.total}`);
     if (!firstPage.rows.length) {
-      return {
-        upCount: null,
-        downCount: null,
-        flatCount: null,
-        limitUpCount: null,
-        limitDownCount: null,
-        totalVolume: null
-      };
+      throw new Error('Eastmoney returned empty rows');
     }
 
     const totalPages = Math.ceil(firstPage.total / PAGE_SIZE);
-    const remainingPageNumbers = [];
+    const pages = [firstPage.rows];
     for (let pn = 2; pn <= totalPages; pn += 1) {
-      remainingPageNumbers.push(pn);
+      const pz = pn === totalPages
+        ? firstPage.total - (totalPages - 1) * PAGE_SIZE
+        : PAGE_SIZE;
+      const page = await fetchPage(pn, pz);
+      console.log(`[MarketData] A-share breadth page ${pn}/${totalPages}: ${page.rows.length} rows`);
+      pages.push(page.rows);
+      if (pn < totalPages) await sleep(PAGE_DELAY_MS);
     }
-    const pages = await promisePool(remainingPageNumbers, 5, (pn) => fetchPage(pn));
-    const allRows = [
-      ...firstPage.rows,
-      ...pages.flatMap((page) => page.rows)
-    ];
 
-    // 风控/限流兜底：如果聚合行数明显不足，认为数据异常
+    const allRows = pages.flat();
+
+    // 风控/限流兜底：如果聚合行数明显不足，认为数据异常，触发 AKShare fallback
     if (allRows.length < firstPage.total * 0.9) {
       console.warn(`[MarketData] A-share breadth rows insufficient: ${allRows.length}/${firstPage.total}`);
-      return {
-        upCount: null,
-        downCount: null,
-        flatCount: null,
-        limitUpCount: null,
-        limitDownCount: null,
-        totalVolume: null
-      };
+      throw new Error(`Eastmoney rows insufficient: ${allRows.length}/${firstPage.total}`);
     }
 
     let upCount = 0;
@@ -552,10 +580,12 @@ const fetchAshareBreadthStats = async () => {
     let limitUpCount = 0;
     let limitDownCount = 0;
     let totalVolumeHands = 0;
+    let totalAmountYuan = 0;
 
     allRows.forEach((row) => {
       const pct = toFiniteOrNull(row.f3);
       const volumeHands = toFiniteOrNull(row.f5);
+      const amount = toFiniteOrNull(row.f6);
       if (pct === null) return;
       if (pct > 0) upCount += 1;
       else if (pct < 0) downCount += 1;
@@ -568,24 +598,88 @@ const fetchAshareBreadthStats = async () => {
       if (Number.isFinite(volumeHands)) {
         totalVolumeHands += volumeHands;
       }
+      if (Number.isFinite(amount)) {
+        totalAmountYuan += amount;
+      }
     });
 
-    // 东方财富 f5 单位为手，1 手 = 100 股
+    // 东方财富 f5 单位为手，1 手 = 100 股；f6 单位为成交金额（元）
     const totalVolume = totalVolumeHands > 0 ? totalVolumeHands * 100 : null;
+    const totalAmount = totalAmountYuan > 0 ? totalAmountYuan : null;
 
-    return { upCount, downCount, flatCount, limitUpCount, limitDownCount, totalVolume };
+    console.log(`[MarketData] A-share breadth aggregated: up=${upCount}, down=${downCount}, flat=${flatCount}, limitUp=${limitUpCount}, limitDown=${limitDownCount}, volume=${totalVolume}, amount=${totalAmount}`);
+    return { upCount, downCount, flatCount, limitUpCount, limitDownCount, totalVolume, totalAmount };
   } catch (error) {
-    console.error('[MarketData] Failed to fetch A-share breadth stats:', error);
-    return {
-      upCount: null,
-      downCount: null,
-      flatCount: null,
-      limitUpCount: null,
-      limitDownCount: null,
-      totalVolume: null
-    };
+    console.error('[MarketData] Eastmoney failed, trying AKShare fallback:', error.message);
+    const fallback = await fetchAshareBreadthStatsFromAkshare();
+    if (fallback && fallback.upCount !== null) {
+      return fallback;
+    }
+    return emptyResult();
   }
 };
+
+const fetchAshareBreadthStatsFromAkshare = () => new Promise((resolve) => {
+  const scriptPath = path.join(__dirname, '../../scripts/akshare_a_share_breadth.py');
+  const candidates = process.platform === 'win32' ? ['python', 'python3', 'py'] : ['python3', 'python'];
+
+  const trySpawn = (index) => {
+    if (index >= candidates.length) {
+      console.error('[MarketData] AKShare fallback: no python executable found');
+      return resolve({ upCount: null, downCount: null, flatCount: null, limitUpCount: null, limitDownCount: null, totalVolume: null, totalAmount: null });
+    }
+
+    const python = candidates[index];
+    const args = python === 'py' ? ['-3', scriptPath] : [scriptPath];
+    const proc = spawn(python, args, { timeout: 90000 });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (data) => { stdout += data.toString(); });
+    proc.stderr.on('data', (data) => { stderr += data.toString(); });
+
+    proc.on('close', (code) => {
+      if (code !== 0) {
+        // python 未安装时通常返回 ENOENT，已经在 error 事件处理
+        console.error(`[MarketData] AKShare fallback ${python} exited ${code}: ${stderr || '(no stderr)'}`);
+        return resolve({ upCount: null, downCount: null, flatCount: null, limitUpCount: null, limitDownCount: null, totalVolume: null, totalAmount: null });
+      }
+      try {
+        const result = JSON.parse(stdout);
+        if (result.error) {
+          console.error('[MarketData] AKShare fallback returned error:', result.error);
+          return resolve({ upCount: null, downCount: null, flatCount: null, limitUpCount: null, limitDownCount: null, totalVolume: null, totalAmount: null });
+        }
+        const mapped = {
+          upCount: Number.isFinite(result.upCount) ? result.upCount : null,
+          downCount: Number.isFinite(result.downCount) ? result.downCount : null,
+          flatCount: Number.isFinite(result.flatCount) ? result.flatCount : null,
+          limitUpCount: Number.isFinite(result.limitUpCount) ? result.limitUpCount : null,
+          limitDownCount: Number.isFinite(result.limitDownCount) ? result.limitDownCount : null,
+          totalVolume: Number.isFinite(result.totalVolume) ? result.totalVolume : null,
+          totalAmount: Number.isFinite(result.totalAmount) ? result.totalAmount : null
+        };
+        console.log(`[MarketData] AKShare fallback aggregated: up=${mapped.upCount}, down=${mapped.downCount}, flat=${mapped.flatCount}, limitUp=${mapped.limitUpCount}, limitDown=${mapped.limitDownCount}, volume=${mapped.totalVolume}, amount=${mapped.totalAmount}`);
+        resolve(mapped);
+      } catch (parseError) {
+        console.error('[MarketData] AKShare fallback parse error:', parseError.message, 'stdout:', stdout);
+        resolve({ upCount: null, downCount: null, flatCount: null, limitUpCount: null, limitDownCount: null, totalVolume: null, totalAmount: null });
+      }
+    });
+
+    proc.on('error', (spawnError) => {
+      // python 命令不存在，尝试下一个
+      if (spawnError.code === 'ENOENT') {
+        return trySpawn(index + 1);
+      }
+      console.error(`[MarketData] AKShare fallback ${python} spawn error:`, spawnError.message);
+      resolve({ upCount: null, downCount: null, flatCount: null, limitUpCount: null, limitDownCount: null, totalVolume: null, totalAmount: null });
+    });
+  };
+
+  trySpawn(0);
+});
 
 const buildTradeMarketSnapshot = async ({ symbol, market, date }) => {
   const marketUpper = String(market || '').toUpperCase();
@@ -992,22 +1086,23 @@ const fetchRealtimeMarketOverview = async () => {
 
   // A 股市场统计仅针对沪深京 A 股全市场计算
   const cnCodes = ['s_sh000001', 's_sz399001', 's_sz399006'];
-  const [previousCloseTotalMarketVolume, breadthStats] = await Promise.all([
-    getPreviousAshareTotalVolume(),
+  const [previousCloseTotalMarketAmount, breadthStats] = await Promise.all([
+    getPreviousAshareTotalAmount(),
     fetchAshareBreadthStats().catch(() => ({
       upCount: null,
       downCount: null,
       flatCount: null,
       limitUpCount: null,
       limitDownCount: null,
-      totalVolume: null
+      totalVolume: null,
+      totalAmount: null
     }))
   ]);
-  const totalMarketVolume = toFiniteOrNull(breadthStats.totalVolume);
-  const volumeChangeRatio = Number.isFinite(totalMarketVolume)
-    && Number.isFinite(previousCloseTotalMarketVolume)
-    && previousCloseTotalMarketVolume > 0
-    ? Number((totalMarketVolume / previousCloseTotalMarketVolume).toFixed(4))
+  const totalMarketAmount = toFiniteOrNull(breadthStats.totalAmount);
+  const volumeChangeRatio = Number.isFinite(totalMarketAmount)
+    && Number.isFinite(previousCloseTotalMarketAmount)
+    && previousCloseTotalMarketAmount > 0
+    ? Number((totalMarketAmount / previousCloseTotalMarketAmount).toFixed(4))
     : null;
 
   // 异步保存当日 A 股快照（不阻塞返回）
@@ -1026,7 +1121,7 @@ const fetchRealtimeMarketOverview = async () => {
       price: Number.isFinite(quote.price) ? quote.price : null,
       change: Number.isFinite(quote.change) ? quote.change : null,
       changePercent: Number.isFinite(quote.changePercent) ? quote.changePercent : null,
-      volume: isCn ? totalMarketVolume : null,
+      volume: isCn ? totalMarketAmount : null,
       volumeChangeRatio: isCn ? volumeChangeRatio : null,
       upCount: isCn ? breadthStats.upCount : null,
       downCount: isCn ? breadthStats.downCount : null,
@@ -1059,6 +1154,13 @@ const getMarketOverview = async ({ date, forceRefresh = false } = {}) => {
 
   try {
     const data = await fetchRealtimeMarketOverview();
+    const hasCnBreadth = Array.isArray(data) && data.some(
+      (item) => item.market === 'CN' && item.upCount !== null && item.volume !== null
+    );
+    if (!hasCnBreadth && cached) {
+      console.warn('[MarketData] Realtime returned no CN breadth, using stale cache');
+      return cached.data;
+    }
     setCachedMarketOverview(todayStr, data);
     return data;
   } catch (error) {

@@ -101,7 +101,7 @@
 
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 16px;">
           <div>
-            <div style="color: #8c8c8c; margin-bottom: 6px; font-size: 12px;">A股全市成交</div>
+            <div style="color: #8c8c8c; margin-bottom: 6px; font-size: 12px;">A股全市成交额</div>
             <div style="font-weight: 500;">{{ formatOverviewVolume(marketData.volume) }}</div>
           </div>
           <div style="border-left: 1px solid #f0f0f0; padding-left: 20px;">
@@ -275,9 +275,15 @@ const formatOverviewVolume = (value) => {
   const number = toFiniteNumber(value);
   if (number === null) return '--';
 
-  const volumeInYi = Math.abs(number) >= 1000 ? number / 100000000 : number;
-  const digits = Math.abs(volumeInYi) >= 1 ? 2 : 4;
-  return `${volumeInYi.toFixed(digits)}亿`;
+  // value 单位为"元"，统一格式化为 亿/万亿。
+  const abs = Math.abs(number);
+  if (abs >= 1e12) {
+    return `${(number / 1e12).toFixed(2)}万亿`;
+  }
+  if (abs >= 1e8) {
+    return `${(number / 1e8).toFixed(2)}亿`;
+  }
+  return `${(number / 1e4).toFixed(2)}万`;
 };
 
 const getTrendColor = (value) => {

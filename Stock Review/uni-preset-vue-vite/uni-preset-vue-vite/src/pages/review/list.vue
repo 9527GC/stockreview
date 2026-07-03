@@ -10,9 +10,25 @@
                 <a-input v-model:value="searchSymbol" placeholder="请输入" style="width: 160px" />
               </a-form-item>
             </a-col>
-            <a-col :flex="'320px'">
+            <a-col :flex="'640px'">
               <a-form-item label="交易时间" style="margin-bottom: 0;">
-                <a-date-picker v-model:value="searchDate" style="width: 200px" placeholder="请选择日期" />
+                <div style="display: flex; flex-wrap: nowrap; align-items: center; gap: 8px;">
+                  <a-radio-group
+                    v-model:value="quickTimeRange"
+                    button-style="solid"
+                    @change="handleQuickRangeChange"
+                  >
+                    <a-radio-button value="month">本月</a-radio-button>
+                    <a-radio-button value="quarter">近三月</a-radio-button>
+                    <a-radio-button value="year">今年</a-radio-button>
+                    <a-radio-button value="all">全部</a-radio-button>
+                  </a-radio-group>
+                  <a-range-picker
+                    v-model:value="searchDateRange"
+                    style="width: 220px"
+                    :placeholder="['开始日期', '结束日期']"
+                  />
+                </div>
               </a-form-item>
             </a-col>
             <a-col :flex="'auto'" style="text-align: right; padding-right: 0;">
@@ -136,7 +152,11 @@ const isReviewModalVisible = ref(false);
 const isReviewSaving = ref(false);
 const currentReviewRecord = ref({});
 const searchSymbol = ref('');
-const searchDate = ref(null);
+const quickTimeRange = ref('month');
+const searchDateRange = ref([
+  dayjs().startOf('month'),
+  dayjs()
+]);
 const currentPriceMap = ref({});
 const selectedTradeType = ref(null);
 const selectedReviewStatus = ref(null);
@@ -146,11 +166,31 @@ const buildQueryParams = (overrides = {}) => ({
   page: 1,
   pageSize: tablePagination.value.pageSize || defaultPageSize,
   symbol: searchSymbol.value || undefined,
-  date: searchDate.value ? searchDate.value.format('YYYY-MM-DD') : undefined,
+  startDate: searchDateRange.value?.[0] ? searchDateRange.value[0].format('YYYY-MM-DD') : undefined,
+  endDate: searchDateRange.value?.[1] ? searchDateRange.value[1].format('YYYY-MM-DD') : undefined,
   type: selectedTradeType.value || undefined,
   reviewStatus: selectedReviewStatus.value || undefined,
   ...overrides
 });
+
+const setDateRangeByShortcut = (value) => {
+  const now = dayjs();
+  if (value === 'month') {
+    searchDateRange.value = [now.startOf('month'), now];
+  } else if (value === 'quarter') {
+    searchDateRange.value = [now.subtract(3, 'month'), now];
+  } else if (value === 'year') {
+    searchDateRange.value = [now.startOf('year'), now];
+  } else if (value === 'all') {
+    searchDateRange.value = null;
+  }
+};
+
+const handleQuickRangeChange = (e) => {
+  const value = e.target.value;
+  setDateRangeByShortcut(value);
+  handleSearch();
+};
 
 const handleSearch = () => {
   store.loadTrades(buildQueryParams({ page: 1 }));
@@ -158,13 +198,14 @@ const handleSearch = () => {
 
 const handleReset = () => {
   searchSymbol.value = '';
-  searchDate.value = null;
+  quickTimeRange.value = 'month';
+  searchDateRange.value = [
+    dayjs().startOf('month'),
+    dayjs()
+  ];
   selectedTradeType.value = null;
   selectedReviewStatus.value = null;
-  store.loadTrades({
-    page: 1,
-    pageSize: tablePagination.value.pageSize || defaultPageSize
-  });
+  store.loadTrades(buildQueryParams({ page: 1 }));
 };
 
 const handleReview = (record) => {
@@ -272,13 +313,14 @@ const formatCurrentPrice = (record) => {
   return price !== undefined && price !== null ? formatMoney(price, record) : '--';
 };
 
-const columns = [
+const columns = computed(() => [
   { title: '时间', dataIndex: 'date', key: 'date', width: 150, sorter: (a, b) => dayjs(a.date).valueOf() - dayjs(b.date).valueOf() },
   { title: '股票信息', dataIndex: 'symbol', key: 'symbol', width: 160, maxWidth: 200 },
   {
     title: '交易类型',
     dataIndex: 'type',
     key: 'type',
+    className: 'trade-type-filter-cell',
     width: 120,
     filters: [{ text: '买入', value: 'BUY' }, { text: '卖出', value: 'SELL' }],
     filterMultiple: false,
@@ -302,7 +344,7 @@ const columns = [
     filteredValue: selectedReviewStatus.value ? [selectedReviewStatus.value] : null
   },
   { title: '操作', key: 'action', width: 120, fixed: 'right', align: 'center' },
-];
+]);
 
 const tablePagination = computed(() => ({
   current: store.tradeReviewsPagination?.current || 1,
@@ -321,10 +363,7 @@ watch(displayData, (records) => {
 }, { immediate: true });
 
 onMounted(() => {
-  store.loadTrades({
-    page: 1,
-    pageSize: defaultPageSize
-  });
+  store.loadTrades(buildQueryParams({ page: 1 }));
 });
 
 const formatDate = (date) => {
@@ -526,6 +565,25 @@ const handleTradeSuccess = () => {
   line-height: 0 !important;
 }
 
+/* 让交易类型列的筛选图标紧跟标题文字，不靠到列宽最右侧 */
+:deep(.trade-type-filter-cell) {
+  display: flex !important;
+  align-items: center;
+
+  .ant-table-column-sorters {
+    flex: 0 0 auto;
+  }
+
+  .ant-table-filter-trigger {
+    position: static;
+    width: auto;
+    height: auto;
+    padding: 0;
+    margin-left: 4px;
+    transform: none;
+  }
+}
+
 /* 让复盘结果列的筛选图标紧跟标题文字，不靠到列宽最右侧 */
 :deep(.review-result-filter-cell) {
   display: flex !important;
@@ -543,5 +601,11 @@ const handleTradeSuccess = () => {
     margin-left: 4px;
     transform: none;
   }
+}
+
+/* 筛选条件有选中值时，筛选图标变为蓝色 */
+:deep(.ant-table-filter-trigger-active),
+:deep(.ant-table-filter-trigger-active .anticon) {
+  color: #1890ff !important;
 }
 </style>

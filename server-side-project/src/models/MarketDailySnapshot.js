@@ -17,6 +17,11 @@ const marketDailySnapshotSchema = new mongoose.Schema({
     type: Number,
     default: null
   },
+  // 全市成交金额（元），包含沪深京所有 A 股
+  totalAmount: {
+    type: Number,
+    default: null
+  },
   // 上涨家数
   upCount: {
     type: Number,
