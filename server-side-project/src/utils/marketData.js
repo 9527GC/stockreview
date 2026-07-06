@@ -1,3 +1,4 @@
+const fs = require('fs');
 const https = require('https');
 const http = require('http');
 const path = require('path');
@@ -12,10 +13,15 @@ const SINA_API_URL = 'http://hq.sinajs.cn/list=';
 const SOHU_HISTORY_API_URL = 'https://q.stock.sohu.com/hisHq?code=';
 const TENCENT_HISTORY_API_URL = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=';
 const EASTMONEY_QUOTE_API_URL = 'https://push2.eastmoney.com/api/qt/clist/get';
+const TENCENT_QUOTE_API_URL = 'http://qt.gtimg.cn/q=';
 const DEFAULT_REQUEST_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
   'Accept': 'application/json,text/plain,*/*'
 };
+
+const A_SHARE_CODE_LIST_CACHE_PATH = path.join(__dirname, '../../scripts/data/a_share_codes.json');
+const A_SHARE_CODE_LIST_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
 
 // 新浪财经接口简易熔断状态
 let sinaCircuitOpen = false;
@@ -493,6 +499,172 @@ const inferLimitThreshold = ({ symbol, name }) => {
   return 9.8;
 };
 
+const toTencentCode = (code) => {
+  code = String(code || '').trim();
+  if (!/^\d{6}$/.test(code)) return null;
+  if (code.startsWith('4') || code.startsWith('8') || code.startsWith('9')) return `bj${code}`;
+  if (code.startsWith('600') || code.startsWith('601') || code.startsWith('603') || code.startsWith('605') || code.startsWith('688') || code.startsWith('689')) return `sh${code}`;
+  if (code.startsWith('000') || code.startsWith('001') || code.startsWith('002') || code.startsWith('003') || code.startsWith('300') || code.startsWith('301')) return `sz${code}`;
+  return null;
+};
+
+const parseTencentQuote = (line) => {
+  line = String(line || '').trim();
+  if (!line || !line.includes('v_')) return null;
+  const parts = line.split('=', 2);
+  if (parts.length < 2) return null;
+  const val = parts[1].trim().replace(/^"|"$/g, '');
+  const fields = val.split('~');
+  if (fields.length < 7) return null;
+  const price = toFiniteOrNull(fields[3]);
+  const close = toFiniteOrNull(fields[4]);
+  const volumeHands = toFiniteOrNull(fields[6]);
+  if (price === null || close === null || close === 0) return null;
+  let amount = 0;
+  if (fields.length > 35 && fields[35]) {
+    const compositeParts = String(fields[35]).split('/');
+    if (compositeParts.length >= 3) {
+      amount = toFiniteOrNull(compositeParts[2]) || 0;
+    }
+  }
+  return {
+    code: fields[2].trim(),
+    name: fields[1].trim(),
+    price,
+    close,
+    volumeHands,
+    amount
+  };
+};
+
+const fetchAshareBreadthStatsFromTencent = async () => {
+  const BATCH_SIZE = 450;
+  const BATCH_DELAY_MS = 200;
+  const MAX_RETRIES = 3;
+  const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+  const emptyResult = () => ({
+    upCount: null,
+    downCount: null,
+    flatCount: null,
+    limitUpCount: null,
+    limitDownCount: null,
+    totalVolume: null,
+    totalAmount: null
+  });
+
+  try {
+    const stat = await fs.promises.stat(A_SHARE_CODE_LIST_CACHE_PATH);
+    if (Date.now() - stat.mtime.getTime() > A_SHARE_CODE_LIST_CACHE_TTL_MS) {
+      throw new Error('A-share code list cache expired');
+    }
+    const raw = await fs.promises.readFile(A_SHARE_CODE_LIST_CACHE_PATH, 'utf8');
+    const codeList = JSON.parse(raw);
+    if (!Array.isArray(codeList) || codeList.length < 1000) {
+      throw new Error(`A-share code list cache invalid: ${codeList?.length}`);
+    }
+
+    const codeNameMap = new Map();
+    const tencentCodes = [];
+    codeList.forEach((item) => {
+      const code = String(item.code || '').trim();
+      const name = String(item.name || '').trim();
+      const tc = toTencentCode(code);
+      if (tc) {
+        tencentCodes.push(tc);
+        codeNameMap.set(tc, name);
+      }
+    });
+
+    if (tencentCodes.length < 1000) {
+      throw new Error(`Valid tencent codes insufficient: ${tencentCodes.length}`);
+    }
+
+    const batchCount = Math.ceil(tencentCodes.length / BATCH_SIZE);
+    let allQuotes = [];
+    for (let i = 0; i < batchCount; i += 1) {
+      const batch = tencentCodes.slice(i * BATCH_SIZE, (i + 1) * BATCH_SIZE);
+      let text = '';
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
+        try {
+          const res = await axios.get(`${TENCENT_QUOTE_API_URL}${batch.join(',')}`, {
+            responseType: 'arraybuffer',
+            timeout: 30000,
+            headers: DEFAULT_REQUEST_HEADERS
+          });
+          text = iconv.decode(Buffer.from(res.data), 'gbk');
+          break;
+        } catch (err) {
+          console.warn(`[MarketData] Tencent batch ${i + 1}/${batchCount} attempt ${attempt} failed: ${err.message}`);
+          if (attempt === MAX_RETRIES) {
+            console.error(`[MarketData] Tencent batch ${i + 1}/${batchCount} skipped`);
+            text = '';
+          } else {
+            await sleep(500 * attempt);
+          }
+        }
+      }
+
+      if (!text) continue;
+
+      const quotes = text.split(';')
+        .map(parseTencentQuote)
+        .filter(Boolean);
+      allQuotes = allQuotes.concat(quotes);
+      console.log(`[MarketData] Tencent batch ${i + 1}/${batchCount}: requested ${batch.length}, parsed ${quotes.length}, total ${allQuotes.length}`);
+
+      if (i < batchCount - 1) await sleep(BATCH_DELAY_MS);
+    }
+
+    if (allQuotes.length < 1000) {
+      throw new Error(`Tencent quotes insufficient: ${allQuotes.length}`);
+    }
+
+    let upCount = 0;
+    let downCount = 0;
+    let flatCount = 0;
+    let limitUpCount = 0;
+    let limitDownCount = 0;
+    let totalVolumeHands = 0;
+    let totalAmountYuan = 0;
+
+    allQuotes.forEach((quote) => {
+      const pct = ((quote.price - quote.close) / quote.close) * 100;
+
+      if (Math.abs(pct) < 0.0001) flatCount += 1;
+      else if (pct > 0) upCount += 1;
+      else downCount += 1;
+
+      const threshold = inferLimitThreshold({
+        symbol: quote.code,
+        name: codeNameMap.get(`sh${quote.code}`) || codeNameMap.get(`sz${quote.code}`) || codeNameMap.get(`bj${quote.code}`) || ''
+      });
+      if (pct >= threshold) limitUpCount += 1;
+      if (pct <= -threshold) limitDownCount += 1;
+
+      if (Number.isFinite(quote.volumeHands) && quote.volumeHands > 0) totalVolumeHands += quote.volumeHands;
+      if (Number.isFinite(quote.amount) && quote.amount > 0) totalAmountYuan += quote.amount;
+    });
+
+    const totalVolume = totalVolumeHands > 0 ? Math.round(totalVolumeHands * 100) : null;
+    const totalAmount = totalAmountYuan > 0 ? Math.round(totalAmountYuan) : null;
+
+    console.log(`[MarketData] Tencent breadth aggregated: up=${upCount}, down=${downCount}, flat=${flatCount}, limitUp=${limitUpCount}, limitDown=${limitDownCount}, volume=${totalVolume}, amount=${totalAmount}`);
+    return {
+      upCount,
+      downCount,
+      flatCount,
+      limitUpCount,
+      limitDownCount,
+      totalVolume,
+      totalAmount
+    };
+  } catch (error) {
+    console.error('[MarketData] Tencent fallback failed:', error.message);
+    return emptyResult();
+  }
+};
+
 const fetchAshareBreadthStats = async () => {
   // 沪深京 A 股全市场；m:0 上海主板/科创板，m:1 深圳主板/创业板，m:1+t:37 覆盖深圳其他板块
   const A_SHARE_FS = 'm:0+t:6,m:0+t:80,m:0+t:81+s:2048,m:1+t:2,m:1+t:23,m:1+t:37';
@@ -670,7 +842,13 @@ const fetchAshareBreadthStats = async () => {
     console.log(`[MarketData] A-share breadth aggregated: up=${upCount}, down=${downCount}, flat=${flatCount}, limitUp=${limitUpCount}, limitDown=${limitDownCount}, volume=${totalVolume}, amount=${totalAmount}`);
     return { upCount, downCount, flatCount, limitUpCount, limitDownCount, totalVolume, totalAmount };
   } catch (error) {
-    console.error('[MarketData] Eastmoney failed, trying AKShare fallback:', error.message);
+    console.error('[MarketData] Eastmoney failed, trying Tencent fallback:', error.message);
+    const tencentFallback = await fetchAshareBreadthStatsFromTencent();
+    if (tencentFallback && tencentFallback.upCount !== null) {
+      return tencentFallback;
+    }
+
+    console.error('[MarketData] Tencent fallback empty, trying AKShare fallback:', error.message);
     const fallback = await fetchAshareBreadthStatsFromAkshare();
     if (fallback && fallback.upCount !== null) {
       return fallback;
