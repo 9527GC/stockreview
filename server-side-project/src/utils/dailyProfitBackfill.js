@@ -25,6 +25,12 @@ const getDatesBetween = (startDateStr, endDateStr) => {
   return dates;
 };
 
+const getPreviousDateStr = (dateStr) => {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() - 1);
+  return d.toISOString().slice(0, 10);
+};
+
 const getNextDateStr = (dateStr) => {
   const d = new Date(dateStr);
   d.setDate(d.getDate() + 1);
@@ -92,12 +98,20 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
   const firstTransferDate = transfers.length > 0 ? dateStrOf(transfers[0].date) : null;
   const earliestDate = [firstTradeDate, firstTransferDate, startDateStr].filter(Boolean).sort()[0];
 
-  // P2 增量回填：若已有缓存数据且比 earliestDate 新，从最近一天的下一天开始
+  // P2 增量回填：
+  // 若已有缓存数据比 earliestDate 新（含相等），说明从 earliestDate 到 lastExisting.date
+  // 的历史收益可能已经过时（例如补录了更早的交易），需要从 earliestDate 开始重新计算，
+  // 并取 earliestDate 前一天的缓存作为 prevTotalAssets；
+  // 若 lastExisting 早于 earliestDate，则其 totalAssets 可作为 prevTotalAssets。
   const lastExisting = await DailyProfit.findOne({ userId }).sort({ date: -1 }).lean();
   let prevTotalAssets = null;
   let recomputeStartDate = earliestDate;
   if (lastExisting && lastExisting.date >= earliestDate) {
-    recomputeStartDate = getNextDateStr(lastExisting.date);
+    const prevDateStr = getPreviousDateStr(earliestDate);
+    const prevRecord = await DailyProfit.findOne({ userId, date: prevDateStr }).lean();
+    prevTotalAssets = prevRecord ? Number(prevRecord.totalAssets) || null : null;
+    recomputeStartDate = earliestDate;
+  } else if (lastExisting) {
     prevTotalAssets = Number(lastExisting.totalAssets) || null;
   }
 
