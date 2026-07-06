@@ -5,12 +5,12 @@
     @ok="handleSubmit"
     @cancel="handleCancel"
     width="600px"
-    :bodyStyle="{ maxHeight: '600px', overflowY: 'auto', padding: '0' }"
+    :bodyStyle="{ padding: '0' }"
     :confirmLoading="loading"
     okText="保存"
     cancelText="取消"
   >
-    <div style="padding: 16px 12px 16px 24px;">
+    <div ref="modalBodyRef" style="padding: 16px 12px 16px 24px; max-height: 600px; overflow-y: auto;">
       <a-form :model="formState" layout="vertical" class="trade-form">
       <a-row :gutter="16">
         <a-col :span="12">
@@ -263,8 +263,56 @@ const emit = defineEmits(['update:open', 'success']);
 
 const store = useTradeStore();
 
+const createDebounce = (fn, delay) => {
+  let timer = null;
+  const wrapped = (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), delay);
+  };
+  wrapped.cancel = () => clearTimeout(timer);
+  return wrapped;
+};
+
 const isEditMode = computed(() => props.mode === 'edit');
 const modalTitle = computed(() => isEditMode.value ? '编辑交易' : '添加交易');
+const TRADE_FORM_DRAFT_KEY = 'stock_review_trade_form_draft';
+
+const isRestoringDraft = ref(false);
+const initialPriceSet = ref(false);
+
+const saveDraft = () => {
+  try {
+    const draft = {
+      symbol: formState.symbol,
+      market: formState.market,
+      type: formState.type,
+      price: formState.price,
+      quantity: formState.quantity,
+      feeMode: formState.feeMode,
+      feeRate: formState.feeRate,
+      feeAmount: formState.feeAmount,
+      date: formState.date ? formState.date.format('YYYY-MM-DD HH:mm:ss') : '',
+      logic: formState.logic,
+      mood: formState.mood
+    };
+    uni.setStorageSync(TRADE_FORM_DRAFT_KEY, JSON.stringify(draft));
+  } catch (e) {
+    console.error('保存交易表单草稿失败:', e);
+  }
+};
+
+const loadFormDraft = () => {
+  try {
+    const draftStr = uni.getStorageSync(TRADE_FORM_DRAFT_KEY);
+    if (!draftStr) return null;
+    return JSON.parse(draftStr);
+  } catch (e) {
+    console.error('读取交易表单草稿失败:', e);
+    return null;
+  }
+};
+
+const debouncedSaveDraft = createDebounce(saveDraft, 500);
 
 const formState = reactive({
   symbol: '',
@@ -333,6 +381,12 @@ watch(() => props.open, (newVal) => {
     Object.keys(validationErrors).forEach(key => validationErrors[key] = '');
     resetMarketOverviewDisplay();
     resetMarketOverviewNotes();
+    // 弹框打开时滚动到顶部，避免保留上次滚动位置
+    nextTick(() => {
+      if (modalBodyRef.value) {
+        modalBodyRef.value.scrollTop = 0;
+      }
+    });
 
     if (isEditMode.value && props.trade) {
       // 编辑模式：回灌交易数据
@@ -345,6 +399,7 @@ watch(() => props.open, (newVal) => {
       formState.date = t.date ? dayjs(t.date) : dayjs();
       formState.logic = t.logic || '';
       formState.mood = t.mood || 'NEUTRAL';
+      initialPriceSet.value = false;
 
       // 恢复保存的大盘快照全部字段
       const savedSnapshot = t.marketOverviewSnapshot || t.marketOverview || {};
@@ -376,22 +431,8 @@ watch(() => props.open, (newVal) => {
         formState.feeAmount = t.commission || 0;
         formState.feeRate = 5;
       }
-    } else if (props.initialData && props.initialData.symbol) {
-      formState.symbol = props.initialData.symbol;
-      formState.market = props.initialData.market || 'CN';
-      formState.price = props.initialData.currentPrice || 0;
-      formState.type = 'BUY';
-      formState.date = dayjs();
-      formState.quantity = 100;
-      formState.mood = 'NEUTRAL';
-      formState.logic = '';
-      // 先恢复默认，再按当前市场加载最近一次手续费偏好
-      formState.feeMode = 'rate';
-      formState.feeRate = 5;
-      formState.feeAmount = 0;
-      loadCommissionPreference(formState.market);
     } else {
-      // Default reset if no initialData
+      // 添加模式：先恢复默认
       formState.symbol = '';
       formState.market = 'CN';
       formState.type = 'BUY';
@@ -400,11 +441,45 @@ watch(() => props.open, (newVal) => {
       formState.mood = 'NEUTRAL';
       formState.logic = '';
       formState.date = dayjs();
-      // 先恢复默认，再按当前市场加载最近一次手续费偏好
       formState.feeMode = 'rate';
       formState.feeRate = 5;
       formState.feeAmount = 0;
-      loadCommissionPreference(formState.market);
+      initialPriceSet.value = false;
+
+      const draft = loadFormDraft();
+      isRestoringDraft.value = true;
+
+      if (props.initialData && props.initialData.symbol) {
+        // 外部传入个股时优先使用传入值
+        formState.symbol = props.initialData.symbol;
+        formState.market = props.initialData.market || 'CN';
+        const hasInitialPrice = props.initialData.currentPrice !== undefined && props.initialData.currentPrice !== null;
+        formState.price = hasInitialPrice ? props.initialData.currentPrice : 0;
+        initialPriceSet.value = hasInitialPrice;
+      }
+
+      if (draft) {
+        // 仅在没有外部传入个股时恢复缓存的个股
+        if (!props.initialData?.symbol) {
+          formState.symbol = draft.symbol || '';
+          formState.market = draft.market || 'CN';
+        }
+        formState.type = draft.type || 'BUY';
+        // 外部明确传入当前价格时，优先使用实时传入价格；否则恢复缓存价格
+        const hasInitialPrice = props.initialData?.currentPrice !== undefined && props.initialData?.currentPrice !== null;
+        formState.price = hasInitialPrice ? formState.price : (draft.price ?? formState.price);
+        formState.quantity = draft.quantity ?? 100;
+        formState.mood = draft.mood || 'NEUTRAL';
+        formState.logic = draft.logic || '';
+        formState.date = draft.date ? dayjs(draft.date) : dayjs();
+        formState.feeMode = draft.feeMode || 'rate';
+        formState.feeRate = draft.feeRate ?? 5;
+        formState.feeAmount = draft.feeAmount ?? 0;
+      } else if (!props.initialData?.symbol) {
+        loadCommissionPreference(formState.market);
+      }
+
+      isRestoringDraft.value = false;
     }
   }
 });
@@ -508,16 +583,7 @@ const previewImage = ref('');
 const savedRange = ref(null);
 const apiStockOptions = ref([]);
 const searchInput = ref('');
-
-const createDebounce = (fn, delay) => {
-  let timer = null;
-  const wrapped = (...args) => {
-    clearTimeout(timer);
-    timer = setTimeout(() => fn(...args), delay);
-  };
-  wrapped.cancel = () => clearTimeout(timer);
-  return wrapped;
-};
+const modalBodyRef = ref(null);
 
 const doSearch = async (val) => {
   searchInput.value = val || '';
@@ -752,7 +818,12 @@ const stockOptions = import.meta.env.DEV ? [
 
 // Auto-detect market based on symbol
 watch(() => formState.symbol, (newVal) => {
-  if (!newVal) return;
+  if (!newVal || isRestoringDraft.value) return;
+  // 外部已明确传入当前价格时，首次不再触发实时价格请求，避免覆盖传入价格
+  if (initialPriceSet.value) {
+    initialPriceSet.value = false;
+    return;
+  }
   const upperVal = newVal.toUpperCase().trim();
   
   // Check against options first
@@ -824,10 +895,11 @@ const loadCommissionPreference = async (market) => {
 };
 
 watch(() => formState.market, (newMarket) => {
+  if (isRestoringDraft.value) return;
   if (!isEditMode.value) {
     loadCommissionPreference(newMarket);
   }
-});
+}, { flush: 'sync' });
 
 const doFetchPrice = async (symbol) => {
   try {
@@ -842,10 +914,18 @@ const doFetchPrice = async (symbol) => {
 
 const fetchPrice = createDebounce(doFetchPrice, 300);
 
+watch(formState, () => {
+  if (!isRestoringDraft.value && !isEditMode.value && props.open) {
+    debouncedSaveDraft();
+  }
+}, { deep: true });
+
 onUnmounted(() => {
   handleSearch.cancel();
   fetchPrice.cancel();
+  debouncedSaveDraft.cancel();
 });
+
 
 const handleCancel = () => {
   emit('update:open', false);
@@ -940,7 +1020,6 @@ const handleSubmit = () => {
 
     store.updateTrade(props.trade.id, updatePayload).then(() => {
       loading.value = false;
-      message.success('交易记录已更新');
       emit('success');
       emit('update:open', false);
       resetMarketOverviewNotes();
@@ -997,7 +1076,6 @@ const handleSubmit = () => {
 
   store.addTrade(tradeData).then(() => {
     loading.value = false;
-    message.success('交易记录已添加');
     emit('success');
     emit('update:open', false);
 

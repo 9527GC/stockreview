@@ -49,8 +49,8 @@ exports.register = async (req, res) => {
       return res.status(400).json({ message: 'Username must be at least 3 characters' });
     }
 
-    if (String(password).length < 6) {
-      return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    if (String(password).length < 4) {
+      return res.status(400).json({ message: 'Password must be at least 4 characters' });
     }
 
     const existingUser = await User.findOne({ username });

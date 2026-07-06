@@ -46,6 +46,7 @@
               {{ getCurrencySymbol(trade.currency) }}{{ (trade.price * trade.quantity).toFixed(2) }}
             </template>
             <template v-if="column.key === 'action'">
+              <a-button type="link" size="small" @click="handleEdit(trade)">编辑</a-button>
               <a-popconfirm
                 title="确定要删除这条交易记录吗？"
                 @confirm="handleDeleteTrade(trade.id, record.symbol)"
@@ -88,6 +89,13 @@
       </template>
     </a-table>
   </a-modal>
+
+  <TradeModal
+    v-model:open="editModalOpen"
+    mode="edit"
+    :trade="editingTrade"
+    @success="onEditSuccess"
+  />
 </template>
 
 <script setup>
@@ -97,6 +105,7 @@ import { getHistoryHoldings, getTradeReviews } from '@/api/index';
 import { message } from 'ant-design-vue';
 import dayjs from 'dayjs';
 import { normalizeSymbol } from '@/utils/stock';
+import TradeModal from './TradeModal.vue';
 
 const props = defineProps({
   open: Boolean
@@ -114,6 +123,10 @@ const total = ref(0);
 const sort = ref('-lastTradeDate');
 const expandedRowKeys = ref([]);
 const expandedBySymbol = ref({});
+
+const editModalOpen = ref(false);
+const editingTrade = ref(null);
+const editingSymbol = ref('');
 
 const pagination = computed(() => ({
   current: currentPage.value,
@@ -215,6 +228,26 @@ const handleDeleteTrade = async (id, symbol) => {
   } catch (err) {
     message.error('删除失败');
   }
+};
+
+const handleEdit = (record) => {
+  editingTrade.value = record;
+  editingSymbol.value = record.symbol || '';
+  editModalOpen.value = true;
+};
+
+const onEditSuccess = async () => {
+  editModalOpen.value = false;
+  editingTrade.value = null;
+  message.success('交易记录已更新');
+
+  if (editingSymbol.value) {
+    const state = ensureExpandedState(editingSymbol.value);
+    state.current = 1;
+    fetchExpandedTrades(editingSymbol.value);
+  }
+  fetchHistoryHoldings();
+  editingSymbol.value = '';
 };
 
 const handleTableChange = (paginationConfig, filters, sorterConfig) => {
@@ -337,7 +370,7 @@ const innerColumns = [
   { title: '金额', key: 'amount', align: 'right' },
   { title: '手续费', dataIndex: 'commission', key: 'commission', align: 'right' },
   { title: '交易逻辑', dataIndex: 'logic', key: 'logic', ellipsis: true },
-  { title: '操作', key: 'action', width: 80, align: 'center' }
+  { title: '操作', key: 'action', width: 120, align: 'center', fixed: 'right' }
 ];
 
 watch(

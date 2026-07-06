@@ -69,7 +69,10 @@
         </div>
       </div>
 
-      <div class="section-title" style="margin-top: 16px;">操作记录</div>
+      <div class="section-title" style="margin-top: 16px; display: flex; justify-content: space-between; align-items: center;">
+        <span>操作记录</span>
+        <a-button type="primary" size="small" @click="handleAddTrade">添加交易</a-button>
+      </div>
       <a-table
         :columns="columns"
         :data-source="operations"
@@ -108,6 +111,13 @@
         mode="edit"
         :trade="editingTrade"
         @success="onEditSuccess"
+      />
+
+      <TradeModal
+        v-model:open="addModalOpen"
+        mode="add"
+        :initial-data="initialTradeData"
+        @success="onAddSuccess"
       />
     </template>
   </a-modal>
@@ -229,6 +239,16 @@ const handleTableChange = (paginationConfig) => {
 const editModalOpen = ref(false);
 const editingTrade = ref(null);
 
+const addModalOpen = ref(false);
+const initialTradeData = computed(() => {
+  if (!props.holding) return {};
+  return {
+    symbol: props.holding.symbol,
+    market: props.holding.market,
+    currentPrice: props.holding.currentPrice
+  };
+});
+
 const handleEdit = (record) => {
   editingTrade.value = record;
   editModalOpen.value = true;
@@ -238,6 +258,16 @@ const onEditSuccess = async () => {
   editModalOpen.value = false;
   editingTrade.value = null;
   message.success('交易记录已更新');
+  await fetchOperations();
+};
+
+const handleAddTrade = () => {
+  addModalOpen.value = true;
+};
+
+const onAddSuccess = async () => {
+  addModalOpen.value = false;
+  message.success('交易记录已添加');
   await fetchOperations();
 };
 

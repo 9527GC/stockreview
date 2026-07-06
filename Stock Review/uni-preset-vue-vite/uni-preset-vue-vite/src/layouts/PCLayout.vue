@@ -97,15 +97,15 @@
       </a-layout>
     </a-layout>
     
-    <TradeModal v-model:open="isModalVisible" />
+    <TradeModal v-model:open="isModalVisible" @success="handleAddSuccess" />
   </a-layout>
 </template>
 
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue';
-import { 
-  PieChartOutlined, 
-  FileTextOutlined, 
+import {
+  PieChartOutlined,
+  FileTextOutlined,
   LogoutOutlined,
   CopyrightOutlined,
   PlusOutlined,
@@ -116,6 +116,7 @@ import {
 } from '@ant-design/icons-vue';
 import TradeModal from '@/components/TradeModal.vue';
 import { useTradeStore } from '@/stores/trade';
+import { message } from 'ant-design-vue';
 
 const props = defineProps({
   pageTitle: {
@@ -171,6 +172,10 @@ const handleLogout = () => {
 
 const showAddModal = () => {
   isModalVisible.value = true;
+};
+
+const handleAddSuccess = () => {
+  message.success('交易记录已添加');
 };
 
 </script>
