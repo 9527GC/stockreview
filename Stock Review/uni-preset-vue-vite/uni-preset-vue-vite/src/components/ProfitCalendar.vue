@@ -110,6 +110,10 @@ const fetchCalendarData = async () => {
   }
 };
 
+defineExpose({
+  fetchCalendarData
+});
+
 onMounted(() => {
   fetchCalendarData();
 });

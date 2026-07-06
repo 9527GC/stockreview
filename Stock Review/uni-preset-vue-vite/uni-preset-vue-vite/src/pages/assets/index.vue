@@ -114,7 +114,7 @@
       <!-- Right: Profit Calendar -->
       <a-col :xl="12" :lg="12" :md="24" :sm="24" :xs="24">
         <a-card :bordered="false" :body-style="{ padding: '0' }" style="height: 381px; overflow: hidden;">
-           <ProfitCalendar />
+           <ProfitCalendar ref="profitCalendarRef" />
         </a-card>
       </a-col>
     </a-row>
@@ -243,7 +243,7 @@
       </a-table>
     </a-card>
 
-    <HistoryHoldingsModal v-model:open="isHistoryModalVisible" />
+    <HistoryHoldingsModal v-model:open="isHistoryModalVisible" @deleted="handleHistoryDeleted" />
     <HoldingDetailModal v-model:open="isHoldingDetailModalVisible" :holding="selectedHolding" />
     <TransferModal v-model:open="isTransferModalVisible" @success="handleTransferSuccess" />
     </div>
@@ -266,6 +266,7 @@ import dayjs from 'dayjs';
 
 const store = useTradeStore();
 const chartData = ref([]);
+const profitCalendarRef = ref(null);
 const isHistoryModalVisible = ref(false);
 const isTransferModalVisible = ref(false);
 const isHoldingDetailModalVisible = ref(false);
@@ -451,6 +452,11 @@ const showHistoryModal = () => {
   isHistoryModalVisible.value = true;
 };
 
+const handleHistoryDeleted = () => {
+  fetchChartData();
+  profitCalendarRef.value?.fetchCalendarData();
+};
+
 const showHoldingDetail = (record) => {
   selectedHolding.value = record;
   isHoldingDetailModalVisible.value = true;
@@ -483,6 +489,7 @@ const handleDelete = (record) => {
           message.success(`已删除 ${record.name} 的所有记录`);
         }
         fetchChartData(); // 重新加载图表
+        profitCalendarRef.value?.fetchCalendarData(); // 重新加载收益日历
       } catch (err) {
         message.error('删除失败，请稍后重试');
       }

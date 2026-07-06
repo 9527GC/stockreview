@@ -45,7 +45,7 @@ const run = async () => {
     commission: 0,
     mood: 'calm',
     news: "<script>alert(1)</script><p>ok</p>",
-    marketOverview: { index: 3050.12, volume: 9800, volumeChangeRatio: 1.12 }
+    marketOverview: { index: 3050.12, volume: 9800000000, volumeChangeRatio: -450000000 }
   });
   if (create.status !== 201) throw new Error(`create trade failed: ${create.status}`);
 

@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 /**
  * A 股每日市场广度快照
- * 存储每个交易日沪深京 A 股的全市场汇总数据，用于量比等需要前一日数据的计算。
+ * 存储每个交易日沪深京 A 股的全市场汇总数据，用于较昨日成交额变化量等需要前一日数据的计算。
  * 数据为公共数据，所有用户共享。
  */
 const marketDailySnapshotSchema = new mongoose.Schema({

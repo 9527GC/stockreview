@@ -357,11 +357,11 @@
 - `snapshotTime`: 快照时间。当前 A 股历史快照默认落日线时间点（如 `15:00:00+08:00`）。
 - **历史快照字段可用性说明**:
   - 若交易记录由前端随交易提交大盘快照，则 `marketOverviewSnapshot` / `marketOverview` 会保留前端当时读取的实时口径：
-    - `volume` 为 **A 股全市成交量（股）**；
-    - `volumeChangeRatio` 为 **当日全市成交量 / 上一交易日全市成交量**；
+    - `volume` 为 **A 股全市成交额（元）**；
+    - `volumeChangeRatio` 为 **较昨日 A 股全市成交额变化量（元），计算口径为 当日成交额 - 上一交易日成交额**；
     - `upCount / downCount / flatCount / limitUpCount / limitDownCount` 为 **A 股全市**涨跌分布与涨跌停家数。
   - 若由后端按交易日期自动补抓 A 股指数历史日线，则稳定可返回：`index`、`price`、`change`、`changePercent`。
-  - 当前第三方历史源无法稳定提供：`volume`（A 股全市成交量）、`volumeChangeRatio`、`upCount`、`downCount`、`flatCount`、`limitUpCount`、`limitDownCount`，这些字段会返回 `null`，前端通常显示为 `--`。
+  - 当前第三方历史源无法稳定提供：`volume`（A 股全市成交额）、`volumeChangeRatio`（较昨日成交额变化量）、`upCount`、`downCount`、`flatCount`、`limitUpCount`、`limitDownCount`，这些字段会返回 `null`，前端通常显示为 `--`。
   - `snapshotStatus=partial` 表示只拿到部分字段；`snapshotStatus=missing` 表示该交易日期/市场未取到有效历史快照；两种情况下都不使用假 `0` 兜底。
   - 当前 `marketOverview` 与 `marketOverviewSnapshot` 返回的是同一份历史快照数据，前者为兼容字段，推荐优先读取 `marketOverviewSnapshot`。
 
@@ -437,8 +437,8 @@
   - `SH` 默认使用上证指数
   - `SZ` 默认使用深证成指
   - `300/301` 开头的深市标的优先使用创业板指
-- 自动补抓的历史快照可能无法稳定提供涨跌分布、涨跌停、量比等字段，这些字段会返回 `null`，不会写入假 `0`。
-- 前端通过 `GET /market/overview` 获取实时大盘时，`volume` 为 **A 股全市成交量（股）**，`volumeChangeRatio` 为 **当日全市成交量 / 上一交易日全市成交量**；将实时大盘快照随交易提交后，上述口径会被原样保留到交易记录中。
+- 自动补抓的历史快照可能无法稳定提供涨跌分布、涨跌停、较昨日成交额变化量等字段，这些字段会返回 `null`，不会写入假 `0`。
+- 前端通过 `GET /market/overview` 获取实时大盘时，`volume` 为 **A 股全市成交额（元）**，`volumeChangeRatio` 为 **较昨日 A 股全市成交额变化量（元），计算口径为 当日成交额 - 上一交易日成交额**；将实时大盘快照随交易提交后，上述口径会被原样保留到交易记录中。
 
 **mood 枚举说明**
 
@@ -525,7 +525,7 @@
 - **字段约定**:
   - 后端稳定返回：`index`、`price`、`change`、`changePercent`、`volume`、`volumeChangeRatio`、`upCount`、`downCount`、`flatCount`、`limitUpCount`、`limitDownCount`。
   - 当前若第三方数据源无法提供某字段，返回 `null`，不使用假 `0` 兜底。
-  - 非 A 股指数（恒生、标普 500）的 `volume`、`volumeChangeRatio`、`upCount`、`downCount`、`flatCount`、`limitUpCount`、`limitDownCount` 固定返回 `null`。
+  - 非 A 股指数（恒生、标普 500）返回 `null`；但前端在港股、美股交易时统一回退展示 A 股大盘数据，因此实际交易中仍可见 A 股全市成交额与较昨日变化量。
   - 历史日期的港美股指数当前无法提供稳定历史数据源，返回数组中只包含 A 股指数；前端若按市场名称（如 `恒生指数`）未命中，会回退到数组第一项（上证指数），从而在历史交易中统一展示 A 股大盘。
 - **出参**:
   ```json
@@ -539,7 +539,7 @@
         "change": 12.34,
         "changePercent": 0.4,
         "volume": 456700000000,
-        "volumeChangeRatio": 0.63,
+        "volumeChangeRatio": -4500000000,
         "upCount": 1876,
         "downCount": 3021,
         "flatCount": 146,
@@ -556,8 +556,8 @@
   - `list[].price`: 指数现价；当前与 `index` 保持一致，便于前端复用通用行情展示组件。
   - `list[].change`: 较上一交易日收盘的涨跌额。
   - `list[].changePercent`: 较上一交易日收盘的涨跌幅，单位为 `%`。
-  - `list[].volume`: **A 股全市成交量（股）**，即沪深京所有 A 股当日成交量合计；由东方财富全市场行情聚合得到，不是单个指数自身成交量。若外部行情源不可达或历史日期未保存快照则返回 `null`。
-  - `list[].volumeChangeRatio`: **A 股全市量比**，计算口径为 `当日全市成交量 / 上一交易日全市成交量`。该值为比值，不是百分比；若当前或上一日全市成交量缺失则返回 `null`。上一日数据来自后端持久化的每日市场快照，首次部署后需至少经过一个交易日（或收盘后定时任务执行）才能生成前一日基线。
+  - `list[].volume`: **A 股全市成交额（元）**，即沪深京所有 A 股当日成交金额合计；由东方财富全市场行情聚合得到，不是单个指数自身成交额。若外部行情源不可达或历史日期未保存快照则返回 `null`。
+  - `list[].volumeChangeRatio`: **较昨日 A 股全市成交额变化量（元）**，计算口径为 `当日 A 股全市成交额 - 上一交易日 A 股全市成交额`；增量展示为红色正数，缩量展示为绿色负数，无变化或缺失展示为 `--`。上一日数据来自后端持久化的 `MarketDailySnapshot`，首次部署后需至少经过一个交易日（或收盘后定时任务执行）才能生成前一日基线。
   - `list[].upCount`: **A 股全市上涨家数**，按沪深京 A 股行情聚合统计；若外部行情源不可达或历史未保存快照则返回 `null`。
   - `list[].downCount`: **A 股全市下跌家数**，按沪深京 A 股行情聚合统计；若外部行情源不可达或历史未保存快照则返回 `null`。
   - `list[].flatCount`: **A 股全市平盘家数**，按沪深京 A 股行情聚合统计；若外部行情源不可达或历史未保存快照则返回 `null`。
@@ -565,8 +565,9 @@
   - `list[].limitDownCount`: **A 股全市跌停家数**，统计口径同 `limitUpCount`；若外部行情源不可达或历史未保存快照则返回 `null`。
 - **前端联调建议**:
   - 字段名保持现状，无需改接口读取路径：`volume`、`volumeChangeRatio`、`upCount`、`downCount`、`flatCount`、`limitUpCount`、`limitDownCount`。
-  - `volume` 当前语义为“**A 股全市成交量（股）**”，前端文案不应再解释为单个指数成交量。
-  - `volumeChangeRatio` 当前语义为“**当日全市成交量 / 上一交易日全市成交量**”，是比值，不是传统盘口量比；前端不要默认追加 `%`。
+  - `volume` 当前语义为“**A 股全市成交额（元）**”，前端文案不应再解释为单个指数成交量。
+  - `volumeChangeRatio` 当前语义为“**较昨日 A 股全市成交额变化量（元）**”，是绝对变化量，不是比值；前端展示时应按金额格式化，并追加 `+/-` 符号，增量红色、缩量绿色。
+  - 港股、美股交易时，前端仍读取 A 股大盘数据（上证指数、深证成指、创业板指）并展示 A 股全市指标。
   - `upCount/downCount/flatCount/limitUpCount/limitDownCount` 在外部行情源不可达或历史快照缺失时仍可能返回 `null`，前端应显示 `--`，不要回退为 `0`。
   - 添加交易时，请根据 `date` 区分调用：当天交易不传 `date` 获取实时大盘；补录历史交易传 `date=YYYY-MM-DD` 获取收盘快照，避免把今天的大盘数据写入历史交易记录。
 

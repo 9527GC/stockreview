@@ -114,7 +114,7 @@ export const useTradeStore = defineStore('trade', () => {
   };
 
   const refreshAfterTradeMutation = async (overrides = {}) => {
-    const params = { page: 1, pageSize: 100, ...lastTradeReviewsParams.value, ...overrides };
+    const params = { page: 1, pageSize: 100, include: 'marketOverview', ...lastTradeReviewsParams.value, ...overrides };
     if (params.symbol) params.symbol = normalizeSymbol(params.symbol);
 
     const [assetsRes, holdingsRes, tradesRes] = await Promise.all([
@@ -210,7 +210,7 @@ export const useTradeStore = defineStore('trade', () => {
       transferRecordsRequestFailed.value = false;
       assetsSummary.value = null;
 
-      const normalizedParams = { page: 1, pageSize: 100, ...params };
+      const normalizedParams = { page: 1, pageSize: 100, include: 'marketOverview', ...params };
       if (normalizedParams.symbol) normalizedParams.symbol = normalizeSymbol(normalizedParams.symbol);
       lastTradeReviewsParams.value = { ...normalizedParams };
 

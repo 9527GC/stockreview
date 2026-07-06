@@ -24,14 +24,14 @@ watch(() => [formState.market, formState.date], ([newMarket, newDate]) => {
 
 - 添加 **过去某天** 的交易时，前端提交的是**今天**的 `marketOverview`。
 - 后端 `addTrade` 又优先使用前端传入的快照，导致历史交易记录里保存了错误日期的大盘数据。
-- 即使前端不传，后端自动补抓的历史日线也只能拿到指数点位，**拿不到历史全市成交量、涨跌分布、涨跌停数**。
+- 即使前端不传，后端自动补抓的历史日线也只能拿到指数点位，**拿不到历史全市成交额、涨跌分布、涨跌停数**。
 
 ### 3. 盘中 vs 收盘数据
 
 - **今天/实时交易**：可以拿到盘中实时数据（东方财富实时接口）。
 - **补录历史交易**：
   - 指数点位可以通过腾讯/搜狐历史日线拿到**收盘数据**。
-  - 全市成交量、涨跌分布、涨跌停数**无法从第三方历史接口回抓**。
+  - 全市成交额、涨跌分布、涨跌停数**无法从第三方历史接口回抓**。
   - 只有当交易发生当天，系统已经通过定时任务把 `MarketDailySnapshot` 保存下来了，才能拿到历史全市指标。
   - 因此补录历史交易时，大盘快照最多只能是**当天收盘后**的数据，不可能是盘中交易时的精确数据。
 
@@ -68,7 +68,7 @@ watch(() => [formState.market, formState.date], ([newMarket, newDate]) => {
 每天 A 股收盘后（如 16:10）运行一次定时任务：
 
 - 调用东方财富全市场接口，保存/更新当天 `MarketDailySnapshot`。
-- 保证即使盘中缓存失效，也有完整的收盘数据可用于历史查询和量比计算。
+- 保证即使盘中缓存失效，也有完整的收盘数据可用于历史查询和较昨日成交额变化量计算。
 
 已有 `MarketDailySnapshot` 模型，只需要加一个调度脚本或复用 `ENABLE_PROFIT_HISTORY_SCHEDULER` 机制即可。
 
@@ -83,7 +83,7 @@ GET /api/market/overview?date=2026-06-27
 - **不传 date 或 date=今天**：返回实时大盘（走缓存或实时抓取）。
 - **传历史 date**：返回该日收盘大盘快照：
   - 指数点位：从腾讯/搜狐历史日线获取。
-  - 全市成交量/涨跌分布/涨跌停：从 `MarketDailySnapshot` 读取，缺失返回 `null`。
+  - 全市成交额/涨跌分布/涨跌停：从 `MarketDailySnapshot` 读取，缺失返回 `null`。
 
 ### 2.3 前端按交易日期调用不同大盘接口
 
@@ -112,7 +112,7 @@ watch(() => [formState.market, formState.date], ([newMarket, newDate]) => {
 
 ### 2.4 历史自动补抓快照不再包含全市指标
 
-已经修改：后端自动补抓的历史日线快照中，`volume`、`volumeChangeRatio`、`upCount`、`downCount`、`flatCount`、`limitUpCount`、`limitDownCount` 统一返回 `null`，避免用指数成交量冒充全市成交量。
+已经修改：后端自动补抓的历史日线快照中，`volume`（A 股全市成交额）、`volumeChangeRatio`（较昨日成交额变化量）、`upCount`、`downCount`、`flatCount`、`limitUpCount`、`limitDownCount` 统一返回 `null`，避免用指数成交额冒充全市成交额。历史日期的 `volume` 和 `volumeChangeRatio` 需在 `MarketDailySnapshot` 已保存时由 `getMarketOverviewForDate` 按当日与上一交易日 `totalAmount` 差值计算。
 
 ---
 

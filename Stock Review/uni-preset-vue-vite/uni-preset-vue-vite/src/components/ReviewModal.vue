@@ -65,7 +65,7 @@
     </div>
 
     <!-- Part 1.5: Market Overview -->
-    <div v-if="record.market === 'CN'" class="review-section" style="margin-top: 24px;">
+    <div class="review-section" style="margin-top: 24px;">
       <div class="section-title">大盘详情</div>
       <div style="background: #f5f7fa; padding: 16px; border-radius: 8px; font-size: 13px;">
         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
@@ -105,9 +105,9 @@
             <div style="font-weight: 500;">{{ formatOverviewVolume(marketData.volume) }}</div>
           </div>
           <div style="border-left: 1px solid #f0f0f0; padding-left: 20px;">
-            <div style="color: #8c8c8c; margin-bottom: 6px; font-size: 12px;">量比</div>
+            <div style="color: #8c8c8c; margin-bottom: 6px; font-size: 12px;">较昨日变化量</div>
             <div :style="{ color: getTrendColor(marketData.volumeChangeRatio) }" style="font-weight: 500;">
-              {{ formatSignedOverviewValue(marketData.volumeChangeRatio, 2, '%') }}
+              {{ formatVolumeChange(marketData.volumeChangeRatio) }}
             </div>
           </div>
         </div>
@@ -286,6 +286,39 @@ const formatOverviewVolume = (value) => {
   return `${(number / 1e4).toFixed(2)}万`;
 };
 
+// 格式化较昨日 A 股全市成交额变化量：增量 +X亿（红色），缩量 -X亿（绿色），无变化/缺失 --
+const formatVolumeChange = (value) => {
+  const number = toFiniteNumber(value);
+  if (number === null || number === 0) return '--';
+
+  const abs = Math.abs(number);
+  let text;
+  if (abs >= 1e12) {
+    text = `${(number / 1e12).toFixed(2)}万亿`;
+  } else if (abs >= 1e8) {
+    text = `${(number / 1e8).toFixed(2)}亿`;
+  } else if (abs >= 1e4) {
+    text = `${(number / 1e4).toFixed(2)}万`;
+  } else {
+    text = `${number.toFixed(2)}`;
+  }
+  return `${number > 0 ? '+' : ''}${text}`;
+};
+
+// 兼容旧数据：volumeChangeRatio 曾是无量纲比值，现在语义为绝对变化量（元）。
+// 若 |value| >= 1e8 或 value === 0，视为新口径；否则尝试用 volume 反推变化量；无法识别返回 null。
+const normalizeVolumeChangeRatio = (value, volume) => {
+  const number = toFiniteNumber(value);
+  if (number === null) return null;
+  if (Math.abs(number) >= 1e8 || number === 0) return number;
+
+  const volumeNumber = toFiniteNumber(volume);
+  if (volumeNumber !== null && number > 0) {
+    return Number(((volumeNumber * number) - volumeNumber).toFixed(2));
+  }
+  return null;
+};
+
 const getTrendColor = (value) => {
   const number = toFiniteNumber(value);
   if (number === null) return '#8c8c8c';
@@ -321,7 +354,7 @@ watch(
       marketData.limitUpCount = toFiniteNumber(newOverview.limitUpCount);
       marketData.limitDownCount = toFiniteNumber(newOverview.limitDownCount);
       marketData.volume = toFiniteNumber(newOverview.volume);
-      marketData.volumeChangeRatio = toFiniteNumber(newOverview.volumeChangeRatio);
+      marketData.volumeChangeRatio = normalizeVolumeChangeRatio(newOverview.volumeChangeRatio, newOverview.volume);
     }
   },
   { immediate: true }

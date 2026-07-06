@@ -102,7 +102,7 @@ const props = defineProps({
   open: Boolean
 });
 
-defineEmits(['update:open']);
+const emit = defineEmits(['update:open', 'deleted']);
 
 const store = useTradeStore();
 
@@ -195,6 +195,7 @@ const handleDelete = async (symbol) => {
     expandedBySymbol.value = next;
     expandedRowKeys.value = expandedRowKeys.value.filter(k => k !== key);
     fetchHistoryHoldings();
+    emit('deleted');
   } catch (err) {
     message.error('清除失败');
   }

@@ -15,6 +15,8 @@ const { sanitizeHtml } = require('../utils/sanitizeHtml');
 const { getDateStringInOffset, getQuoteDateKeyInOffset } = require('../utils/dailyProfit');
 const messages = require('../utils/errorMessages');
 const dirtyDataManager = require('../services/dirtyDataManager');
+const DailyProfit = require('../models/DailyProfit');
+const DailyRevenue = require('../models/DailyRevenue');
 
 const marketFromTrade = (trade) => {
   const ex = String(trade?.market || '').toUpperCase();
@@ -635,11 +637,17 @@ exports.deleteHolding = async (req, res) => {
 
     await rebuildAssetFromLedger(userId);
     await upsertTodayDailyProfit(userId);
-    
+
     if (earliestDateStr) {
+      // 删除持仓会影响从最早交易日到今天的所有历史收益，标记脏数据并清除该日期之后的缓存，强制完整重算
+      dirtyDataManager.markDirtyFromDate(userId, earliestDateStr).catch(err => {
+        console.error('[Trade] Error marking dirty data:', err);
+      });
+      await DailyProfit.deleteMany({ userId, date: { $gte: earliestDateStr } });
+      await DailyRevenue.deleteMany({ userId, date: { $gte: earliestDateStr } });
       await backfillDailyProfit(userId, earliestDateStr);
     }
-    
+
     res.json({
       message: 'Holding and related trades deleted successfully',
       symbol,
@@ -657,6 +665,10 @@ exports.addTrade = async (req, res) => {
     date = parseDateInOffset(date, 480);
     if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
       return res.status(400).json({ message: 'Invalid date' });
+    }
+    // 交易日期不能选择未来时间
+    if (date > new Date()) {
+      return res.status(400).json({ message: '交易日期不能选择未来时间' });
     }
 
     // 必填字段校验

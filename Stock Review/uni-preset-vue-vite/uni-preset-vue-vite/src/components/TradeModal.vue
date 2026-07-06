@@ -90,8 +90,8 @@
         </a-col>
       </a-row>
 
-      <a-form-item label="交易时间">
-        <a-date-picker v-model:value="formState.date" show-time style="width: 100%" :disabled="isEditMode" />
+      <a-form-item label="交易时间" :validate-status="validationErrors.date ? 'error' : ''" :help="validationErrors.date">
+        <a-date-picker v-model:value="formState.date" show-time style="width: 100%" :disabled="isEditMode" :disabledDate="disabledDate" />
       </a-form-item>
 
       <a-divider style="margin: 24px 0 16px 0;">交易当时</a-divider>
@@ -137,9 +137,9 @@
              <div>{{ formatOverviewVolume(marketOverview.volume) }}</div>
           </div>
           <div style="flex: 1; border-left: 1px solid #f0f0f0; padding-left: 16px;">
-             <div style="color: #8c8c8c; margin-bottom: 4px; font-size: 12px;">量比</div>
+             <div style="color: #8c8c8c; margin-bottom: 4px; font-size: 12px;">较昨日变化量</div>
              <div :style="{ color: getTrendColor(marketOverview.volumeChangeRatio) }">
-               {{ formatSignedOverviewValue(marketOverview.volumeChangeRatio, 2, '%') }}
+               {{ formatVolumeChange(marketOverview.volumeChangeRatio) }}
              </div>
           </div>
         </div>
@@ -358,7 +358,7 @@ watch(() => props.open, (newVal) => {
       marketOverview.limitUpCount = savedSnapshot.limitUpCount ?? null;
       marketOverview.limitDownCount = savedSnapshot.limitDownCount ?? null;
       marketOverview.volume = savedSnapshot.volume ?? null;
-      marketOverview.volumeChangeRatio = savedSnapshot.volumeChangeRatio ?? null;
+      marketOverview.volumeChangeRatio = normalizeVolumeChangeRatio(savedSnapshot.volumeChangeRatio, savedSnapshot.volume);
       marketOverview.news = t.news || '';
       marketOverview.images = savedSnapshot.images || [];
 
@@ -444,6 +444,39 @@ const formatOverviewVolume = (value) => {
     return `${(number / 1e8).toFixed(2)}亿`;
   }
   return `${(number / 1e4).toFixed(2)}万`;
+};
+
+// 格式化较昨日 A 股全市成交额变化量：增量 +X亿（红色），缩量 -X亿（绿色），无变化/缺失 --
+const formatVolumeChange = (value) => {
+  const number = toFiniteNumber(value);
+  if (number === null || number === 0) return '--';
+
+  const abs = Math.abs(number);
+  let text;
+  if (abs >= 1e12) {
+    text = `${(number / 1e12).toFixed(2)}万亿`;
+  } else if (abs >= 1e8) {
+    text = `${(number / 1e8).toFixed(2)}亿`;
+  } else if (abs >= 1e4) {
+    text = `${(number / 1e4).toFixed(2)}万`;
+  } else {
+    text = `${number.toFixed(2)}`;
+  }
+  return `${number > 0 ? '+' : ''}${text}`;
+};
+
+// 兼容旧数据：volumeChangeRatio 曾是无量纲比值（当日/上一日），现在语义为绝对变化量（元）。
+// 若 |value| >= 1e8 或 value === 0，视为新口径；否则尝试用 volume 反推变化量；无法识别返回 null。
+const normalizeVolumeChangeRatio = (value, volume) => {
+  const number = toFiniteNumber(value);
+  if (number === null) return null;
+  if (Math.abs(number) >= 1e8 || number === 0) return number;
+
+  const volumeNumber = toFiniteNumber(volume);
+  if (volumeNumber !== null && number > 0) {
+    return Number(((volumeNumber * number) - volumeNumber).toFixed(2));
+  }
+  return null;
 };
 
 const formatOverviewValue = (value, digits = 2, suffix = '') => {
@@ -670,7 +703,8 @@ const resetMarketOverviewNotes = () => {
 // Sync store market overview to local reactive object
 watch(() => store.marketOverview, (newVal) => {
   if (newVal && newVal.length > 0) {
-    const marketMap = { CN: '上证指数', HK: '恒生指数', US: '标普500' };
+    // 港股、美股交易也统一展示 A 股大盘，因此只按 CN 匹配 A 股指数；HK/US 会回退到数组第一项
+    const marketMap = { CN: '上证指数' };
     const targetName = marketMap[formState.market];
     const matchedIndex = targetName
       ? newVal.find(item => item.name === targetName) || newVal[0]
@@ -696,7 +730,7 @@ watch(() => store.marketOverview, (newVal) => {
       marketOverview.flatCount = toFiniteNumber(matchedIndex.flatCount);
       marketOverview.limitUpCount = toFiniteNumber(matchedIndex.limitUpCount);
       marketOverview.limitDownCount = toFiniteNumber(matchedIndex.limitDownCount);
-      marketOverview.volumeChangeRatio = toFiniteNumber(matchedIndex.volumeChangeRatio);
+      marketOverview.volumeChangeRatio = normalizeVolumeChangeRatio(matchedIndex.volumeChangeRatio, matchedIndex.volume);
     }
   }
 }, { deep: true });
@@ -824,11 +858,17 @@ const validationErrors = reactive({
   price: '',
   quantity: '',
   mood: '',
-  logic: ''
+  logic: '',
+  date: ''
 });
 
 const clearFieldError = (field) => {
   if (validationErrors[field]) validationErrors[field] = '';
+};
+
+// 禁用今天之后的日期（交易时间不能选择未来日期）
+const disabledDate = (current) => {
+  return current && current.isAfter(dayjs(), 'day');
 };
 
 const validateForm = () => {
@@ -847,6 +887,10 @@ const validateForm = () => {
     validationErrors.quantity = '请输入成交数量';
     isValid = false;
   }
+  if (formState.date && formState.date.isAfter(dayjs())) {
+    validationErrors.date = '交易时间不能选择未来时间';
+    isValid = false;
+  }
   if (!formState.mood) {
     validationErrors.mood = '请选择个人状态';
     isValid = false;
@@ -863,6 +907,7 @@ watch(() => formState.price, () => clearFieldError('price'));
 watch(() => formState.quantity, () => clearFieldError('quantity'));
 watch(() => formState.mood, () => clearFieldError('mood'));
 watch(() => formState.logic, () => clearFieldError('logic'));
+watch(() => formState.date, () => clearFieldError('date'));
 
 const handleSubmit = () => {
   if (loading.value) return;

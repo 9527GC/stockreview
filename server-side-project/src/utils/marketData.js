@@ -320,7 +320,7 @@ const getBenchmarkPointValue = async ({ baseDate, targetDate, market = 'SH' }) =
 
 /**
  * 保存/更新 A 股每日市场广度快照
- * 用于后续计算量比（当日成交量 / 前一日成交量）。
+ * 用于后续计算较昨日 A 股全市成交额变化量（当日成交额 - 上一交易日成交额）。
  */
 const saveAshareDailySnapshot = async (date, stats) => {
   // 按北京时间（UTC+8）确定日期
@@ -372,16 +372,25 @@ const saveAshareDailySnapshot = async (date, stats) => {
 };
 
 /**
- * 获取指定日期之前最近一个交易日的 A 股全市成交金额
+ * 获取指定日期之前最近一个交易日的 A 股全市成交金额（元）
+ * 用于计算较昨日 A 股全市成交额变化量。
  */
 const getPreviousAshareTotalAmount = async (beforeDate = new Date()) => {
   // 按北京时间（UTC+8）确定日期
   const targetDate = getDateStringInOffset(480, beforeDate);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) return null;
+  return getPreviousAshareTotalAmountForDate(targetDate);
+};
+
+/**
+ * 获取指定日期字符串之前最近一个交易日的 A 股全市成交金额（元）
+ * 用于计算较昨日 A 股全市成交额变化量。
+ */
+const getPreviousAshareTotalAmountForDate = async (targetDateStr) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDateStr)) return null;
 
   try {
     const record = await MarketDailySnapshot.findOne({
-      date: { $lt: targetDate },
+      date: { $lt: targetDateStr },
       totalAmount: { $gt: 0 }
     }).sort({ date: -1 });
     return record ? record.totalAmount : null;
@@ -422,6 +431,7 @@ const setCachedMarketOverview = (dateStr, data) => {
 /**
  * 获取指定历史日期的 A 股大盘概览
  * 指数点位来自腾讯历史日线；全市成交量/涨跌分布来自已保存的 MarketDailySnapshot。
+ * 较昨日 A 股全市成交额变化量由当日与上一交易日的 MarketDailySnapshot.totalAmount 差值得到。
  * 港美股历史指数暂不支持，返回 A 股指数供前端统一展示。
  */
 const getMarketOverviewForDate = async (dateStr) => {
@@ -431,14 +441,19 @@ const getMarketOverviewForDate = async (dateStr) => {
     { code: 'zs_399006', name: '创业板指', symbol: '399006.SZ', market: 'CN' }
   ];
 
-  const [snapshots, daily] = await Promise.all([
+  const [snapshots, daily, previousAmount] = await Promise.all([
     Promise.all(benchmarks.map((b) => getHistoricalIndexSnapshot({ ...b, date: dateStr }))),
-    MarketDailySnapshot.findOne({ date: dateStr })
+    MarketDailySnapshot.findOne({ date: dateStr }),
+    getPreviousAshareTotalAmountForDate(dateStr)
   ]);
+
+  const volumeChange = (daily?.totalAmount != null && previousAmount != null)
+    ? Number((daily.totalAmount - previousAmount).toFixed(2))
+    : null;
 
   const marketMetrics = daily ? {
     volume: daily.totalAmount ?? daily.totalVolume,
-    volumeChangeRatio: null,
+    volumeChangeRatio: volumeChange,
     upCount: daily.upCount,
     downCount: daily.downCount,
     flatCount: daily.flatCount,
@@ -503,9 +518,52 @@ const fetchAshareBreadthStats = async () => {
     fields: 'f3,f5,f6,f12,f14'
   })}`;
 
+  const fetchPageWithCurl = (url) => new Promise((resolve, reject) => {
+    // 东方财富在 Node.js 的 TLS 栈中会被服务端过早关闭连接（missing close_notify），
+    // 但部分环境下 curl 的 schannel 可以正常接收并返回响应体，因此用 curl 作为兜底重试。
+    const curlCmd = process.platform === 'win32' ? 'curl.exe' : 'curl';
+    const proc = spawn(curlCmd, [
+      '-s', '-L', '--max-time', '10', '--retry', '1', '--connect-timeout', '5',
+      '-H', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+      '-H', 'Referer: https://quote.eastmoney.com/',
+      '-H', 'Accept: application/json,text/plain,*/*',
+      url
+    ], { timeout: 15000 });
+
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (data) => { stdout += data.toString(); });
+    proc.stderr.on('data', (data) => { stderr += data.toString(); });
+
+    proc.on('close', (code) => {
+      if (code !== 0) {
+        return reject(new Error(`curl exited ${code}: ${stderr || '(no stderr)'}`));
+      }
+      try {
+        const payload = JSON.parse(stdout);
+        if (payload && payload.rc !== undefined && payload.rc !== 0) {
+          throw new Error(`Eastmoney rc=${payload.rc} msg=${payload.msg || ''}`);
+        }
+        const rows = Array.isArray(payload?.data?.diff) ? payload.data.diff : [];
+        const total = Number(payload?.data?.total);
+        resolve({
+          rows,
+          total: Number.isFinite(total) ? total : rows.length
+        });
+      } catch (parseError) {
+        reject(new Error(`curl parse error: ${parseError.message}`));
+      }
+    });
+
+    proc.on('error', (spawnError) => {
+      reject(new Error(`curl spawn error: ${spawnError.message}`));
+    });
+  });
+
   const fetchPage = async (pn, pz, attempt = 1) => {
+    const url = buildUrl(pn, pz);
     try {
-      const response = await axios.get(buildUrl(pn, pz), {
+      const response = await axios.get(url, {
         timeout: REQUEST_TIMEOUT_MS,
         maxRedirects: 5,
         headers: {
@@ -533,7 +591,9 @@ const fetchAshareBreadthStats = async () => {
         await sleep(delay);
         return fetchPage(pn, pz, attempt + 1);
       }
-      throw error;
+      // axios 多次重试仍失败，使用 curl 兜底
+      console.warn(`[MarketData] A-share breadth page ${pn} axios retries exhausted, trying curl fallback`);
+      return fetchPageWithCurl(url);
     }
   };
 
@@ -683,6 +743,32 @@ const fetchAshareBreadthStatsFromAkshare = () => new Promise((resolve) => {
 
 const buildTradeMarketSnapshot = async ({ symbol, market, date }) => {
   const marketUpper = String(market || '').toUpperCase();
+
+  // 港股、美股交易统一读取 A 股大盘快照（含全市成交额、较昨日变化量、涨跌分布）
+  if (['HK', 'US'].includes(marketUpper)) {
+    try {
+      const dateStr = formatHistoryDate(date);
+      const list = await getMarketOverviewForDate(dateStr);
+      const snapshot = Array.isArray(list) && list.length > 0 ? list[0] : null;
+      const snapshotStatus = inferSnapshotStatus(snapshot);
+      return {
+        marketOverviewSnapshot: snapshot,
+        marketOverview: snapshot,
+        snapshotStatus,
+        snapshotSource: snapshot?.snapshotSource || null,
+        snapshotTime: snapshot?.snapshotTime ? new Date(snapshot.snapshotTime) : null
+      };
+    } catch (error) {
+      return {
+        marketOverviewSnapshot: null,
+        marketOverview: null,
+        snapshotStatus: 'missing',
+        snapshotSource: null,
+        snapshotTime: null
+      };
+    }
+  }
+
   if (!['SH', 'SZ', 'CN'].includes(marketUpper)) {
     return {
       marketOverviewSnapshot: null,
@@ -1065,6 +1151,7 @@ const getQuotes = (symbols) => {
 
 /**
  * 获取实时大盘指数与 A 股全市场指标
+ * volumeChangeRatio 表示较昨日 A 股全市成交额变化量（元），即 当日成交额 - 上一交易日成交额。
  */
 const fetchRealtimeMarketOverview = async () => {
   // s_sh000001: 上证指数
@@ -1085,6 +1172,7 @@ const fetchRealtimeMarketOverview = async () => {
   };
 
   // A 股市场统计仅针对沪深京 A 股全市场计算
+  // volumeChangeRatio 语义为“较昨日 A 股全市成交额变化量（元）”，即 当日成交额 - 上一交易日成交额
   const cnCodes = ['s_sh000001', 's_sz399001', 's_sz399006'];
   const [previousCloseTotalMarketAmount, breadthStats] = await Promise.all([
     getPreviousAshareTotalAmount(),
@@ -1101,8 +1189,7 @@ const fetchRealtimeMarketOverview = async () => {
   const totalMarketAmount = toFiniteOrNull(breadthStats.totalAmount);
   const volumeChangeRatio = Number.isFinite(totalMarketAmount)
     && Number.isFinite(previousCloseTotalMarketAmount)
-    && previousCloseTotalMarketAmount > 0
-    ? Number((totalMarketAmount / previousCloseTotalMarketAmount).toFixed(4))
+    ? Number((totalMarketAmount - previousCloseTotalMarketAmount).toFixed(2))
     : null;
 
   // 异步保存当日 A 股快照（不阻塞返回）
@@ -1137,6 +1224,7 @@ const fetchRealtimeMarketOverview = async () => {
  * @param {Object} options
  * @param {string} [options.date] - YYYY-MM-DD，不传或传今天则返回实时数据；传历史日期返回收盘快照
  * @param {boolean} [options.forceRefresh=false] - 是否强制绕过缓存重新拉取实时数据，主要用于收盘后定时任务
+ * @returns {Promise<Array>} 大盘概览列表；CN 指数携带 A 股全市成交额、较昨日变化量（元）及涨跌分布
  */
 const getMarketOverview = async ({ date, forceRefresh = false } = {}) => {
   const todayStr = getBeijingDateString();
