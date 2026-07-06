@@ -20,6 +20,7 @@ node_modules/
 build/
 .next/
 out/
+coverage/
 
 # Local documentation drafts (not synced to Gitee)
 docs/INFO/
