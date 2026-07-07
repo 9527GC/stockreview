@@ -146,6 +146,7 @@
         :row-key="record => record.symbol"
         :pagination="holdingsPagination"
         :scroll="{ x: 1000 }"
+        :loading="store.loading || store.refreshing"
         @change="handlePaginationChange"
       >
         <template #bodyCell="{ column, record }">
@@ -243,8 +244,8 @@
       </a-table>
     </a-card>
 
-    <HistoryHoldingsModal v-model:open="isHistoryModalVisible" @deleted="handleHistoryDeleted" />
-    <HoldingDetailModal v-model:open="isHoldingDetailModalVisible" :holding="selectedHolding" />
+    <HistoryHoldingsModal v-model:open="isHistoryModalVisible" @deleted="handleHistoryChanged" @changed="handleHistoryChanged" />
+    <HoldingDetailModal v-model:open="isHoldingDetailModalVisible" :holding="selectedHolding" @changed="handleHoldingChanged" />
     <TransferModal v-model:open="isTransferModalVisible" @success="handleTransferSuccess" />
     </div>
   </PCLayout>
@@ -263,6 +264,7 @@ import { getProfitCurve } from '@/api/index';
 import { ArrowUpOutlined, ArrowDownOutlined, HistoryOutlined } from '@ant-design/icons-vue';
 import { message, Modal } from 'ant-design-vue';
 import dayjs from 'dayjs';
+import { normalizeSymbol } from '@/utils/stock';
 
 const store = useTradeStore();
 const chartData = ref([]);
@@ -452,9 +454,23 @@ const showHistoryModal = () => {
   isHistoryModalVisible.value = true;
 };
 
-const handleHistoryDeleted = () => {
+const handleHistoryChanged = async () => {
+  await store.loadTrades();
   fetchChartData();
   profitCalendarRef.value?.fetchCalendarData();
+};
+
+const handleHoldingChanged = async (symbol) => {
+  await store.loadTrades();
+  fetchChartData();
+  profitCalendarRef.value?.fetchCalendarData();
+  if (selectedHolding.value && symbol) {
+    const normalized = normalizeSymbol(symbol);
+    const updated = store.holdings.find(h => normalizeSymbol(h.symbol) === normalized);
+    if (updated) {
+      selectedHolding.value = updated;
+    }
+  }
 };
 
 const showHoldingDetail = (record) => {

@@ -693,16 +693,43 @@ const removeImage = (index) => {
 };
 
 const MAX_IMAGE_SIZE = 2 * 1024 * 1024; // 2MB
+const MAX_IMAGE_COUNT = 3; // 最多 3 张
+const MAX_TOTAL_IMAGE_SIZE = 5 * 1024 * 1024; // 所有图片 base64 总大小不超过 5MB
+
+// 计算 base64 字符串的字节大小（去掉 data URI 头）
+const getBase64ByteSize = (base64) => {
+  if (!base64 || typeof base64 !== 'string') return 0;
+  const idx = base64.indexOf(',');
+  const data = idx >= 0 ? base64.slice(idx + 1) : base64;
+  const padding = (data.match(/=+$/) || [''])[0].length;
+  return Math.floor((data.length - padding) * 0.75);
+};
 
 const processImageFile = (file) => {
   if (!file) return;
+
+  if ((marketOverview.images || []).length >= MAX_IMAGE_COUNT) {
+    message.warning('最多添加 3 张图片');
+    return;
+  }
+
   if (file.size > MAX_IMAGE_SIZE) {
     message.warning('图片大小不能超过 2MB');
     return;
   }
+
   const reader = new FileReader();
   reader.onload = (event) => {
-    insertImage(event.target.result);
+    const base64 = event.target.result;
+    const currentSize = (marketOverview.images || []).reduce((sum, img) => sum + getBase64ByteSize(img), 0);
+    const newSize = getBase64ByteSize(base64);
+
+    if (currentSize + newSize > MAX_TOTAL_IMAGE_SIZE) {
+      message.warning('图片总大小不能超过 5MB');
+      return;
+    }
+
+    insertImage(base64);
   };
   reader.readAsDataURL(file);
 };

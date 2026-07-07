@@ -140,7 +140,7 @@ const props = defineProps({
   }
 });
 
-defineEmits(['update:open']);
+const emit = defineEmits(['update:open', 'changed']);
 
 const store = useTradeStore();
 
@@ -259,6 +259,7 @@ const onEditSuccess = async () => {
   editingTrade.value = null;
   message.success('交易记录已更新');
   await fetchOperations();
+  emit('changed', props.holding?.symbol);
 };
 
 const handleAddTrade = () => {
@@ -269,6 +270,7 @@ const onAddSuccess = async () => {
   addModalOpen.value = false;
   message.success('交易记录已添加');
   await fetchOperations();
+  emit('changed', props.holding?.symbol);
 };
 
 const handleDelete = async (record) => {
@@ -276,6 +278,7 @@ const handleDelete = async (record) => {
     await store.deleteTrade(record.id);
     message.success('交易记录已删除');
     await fetchOperations();
+    emit('changed', record.symbol);
   } catch (err) {
     message.error('删除失败');
   }

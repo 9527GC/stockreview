@@ -44,12 +44,13 @@
 
     <a-card :bordered="false">
       <!-- Table -->
-      <a-table 
-        :columns="columns" 
-        :data-source="displayData" 
+      <a-table
+        :columns="columns"
+        :data-source="displayData"
         :row-key="record => record.id"
         :scroll="{ x: 1300 }"
         :pagination="tablePagination"
+        :loading="store.loading || store.refreshing"
         @change="handleTableChange"
       >
         <template #bodyCell="{ column, record }">

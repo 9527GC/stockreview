@@ -112,7 +112,7 @@ const props = defineProps({
   open: Boolean
 });
 
-const emit = defineEmits(['update:open', 'deleted']);
+const emit = defineEmits(['update:open', 'deleted', 'changed']);
 
 const store = useTradeStore();
 
@@ -226,6 +226,7 @@ const handleDeleteTrade = async (id, symbol) => {
       fetchExpandedTrades(symbol);
     }
     fetchHistoryHoldings();
+    emit('changed', symbol);
   } catch (err) {
     message.error('删除失败');
   }
@@ -248,6 +249,7 @@ const onEditSuccess = async () => {
     fetchExpandedTrades(editingSymbol.value);
   }
   fetchHistoryHoldings();
+  emit('changed', editingSymbol.value);
   editingSymbol.value = '';
 };
 
@@ -399,8 +401,17 @@ watch(
   white-space: nowrap;
 }
 
-.history-holdings-modal :deep(.ant-modal-content) {
+.history-holdings-modal :deep(.ant-modal) {
   max-height: 80vh;
+  margin: 0 auto;
+  padding-bottom: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.history-holdings-modal :deep(.ant-modal-content) {
+  flex: 1;
+  max-height: 100%;
   display: flex;
   flex-direction: column;
 }

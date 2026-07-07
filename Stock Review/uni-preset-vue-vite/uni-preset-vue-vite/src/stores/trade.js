@@ -26,6 +26,7 @@ export const useTradeStore = defineStore('trade', () => {
   const holdingsList = ref([]); // 持仓列表
   const assetsSummary = ref(null); // 资产概览
   const loading = ref(false);
+  const refreshing = ref(false); // 交易变更后的后台刷新状态
   const marketOverview = ref(null); // 大盘行情
   const commissionPreference = ref({
     CN: { mode: 'rate', rate: 5, amount: 0 },
@@ -123,18 +124,64 @@ export const useTradeStore = defineStore('trade', () => {
       getTradeReviews(params).catch(() => ({ list: [] }))
     ]);
 
-    assetsSummary.value = assetsRes;
-    holdingsList.value = (holdingsRes?.list || []).filter(h => !!h?.symbol);
-    setTradesFromResponse(tradesRes, { current: params.page, pageSize: params.pageSize });
+    // 仅当拿到有效响应时才覆盖已有数据，避免一次刷新失败把页面刷成空白
+    if (assetsRes) assetsSummary.value = assetsRes;
+    if (holdingsRes) holdingsList.value = (holdingsRes?.list || []).filter(h => !!h?.symbol);
+    if (tradesRes) {
+      setTradesFromResponse(tradesRes, { current: params.page, pageSize: params.pageSize });
 
-    if (Number(params.page) > 1 && trades.value.length === 0 && tradeReviewsPagination.value.total > 0) {
-      const fallbackParams = { ...params, page: Number(params.page) - 1 };
-      const fallbackTradesRes = await getTradeReviews(fallbackParams).catch(() => ({ list: [] }));
-      setTradesFromResponse(fallbackTradesRes, { current: fallbackParams.page, pageSize: fallbackParams.pageSize });
-      lastTradeReviewsParams.value = { ...fallbackParams };
+      if (Number(params.page) > 1 && trades.value.length === 0 && tradeReviewsPagination.value.total > 0) {
+        const fallbackParams = { ...params, page: Number(params.page) - 1 };
+        const fallbackTradesRes = await getTradeReviews(fallbackParams).catch(() => ({ list: [] }));
+        setTradesFromResponse(fallbackTradesRes, { current: fallbackParams.page, pageSize: fallbackParams.pageSize });
+        lastTradeReviewsParams.value = { ...fallbackParams };
+      }
     }
 
     saveTrades();
+  };
+
+  // 后台刷新调度器：多个连续刷新合并为一次，避免抖动
+  let refreshTask = null;
+  let refreshPending = false;
+  let pendingOverrides = {};
+
+  const runRefreshAfterTradeMutation = (overrides = {}) => {
+    if (refreshTask) {
+      refreshPending = true;
+      pendingOverrides = { ...pendingOverrides, ...overrides };
+      return;
+    }
+
+    refreshing.value = true;
+    refreshTask = refreshAfterTradeMutation(overrides)
+      .finally(() => {
+        refreshing.value = false;
+        refreshTask = null;
+
+        if (refreshPending) {
+          refreshPending = false;
+          const nextOverrides = pendingOverrides;
+          pendingOverrides = {};
+          runRefreshAfterTradeMutation(nextOverrides);
+        }
+      });
+  };
+
+  // 将 timestamp id 解析为 MongoDB id，避免为了一次映射触发全量刷新
+  const resolveTimestampId = async (timestampId) => {
+    if (isMongoObjectId(timestampId)) return timestampId;
+    if (!looksLikeTimestampId(timestampId)) return timestampId;
+
+    try {
+      const res = await getTradeReviews({ page: 1, pageSize: 100 });
+      const list = extractListFromResponse(res);
+      const matched = list.map(normalizeTradeRecord).find(t => String(t?.timestamp) === String(timestampId));
+      return matched?.id || timestampId;
+    } catch (err) {
+      console.error('Failed to resolve timestamp id:', err);
+      return timestampId;
+    }
   };
 
   const isMongoObjectId = (value) => {
@@ -307,7 +354,8 @@ export const useTradeStore = defineStore('trade', () => {
         date: typeof trade.date === 'string' ? trade.date : dayjs(trade.date).format('YYYY-MM-DD HH:mm:ss')
       });
 
-      await refreshAfterTradeMutation();
+      // 后台刷新，不阻塞调用方
+      runRefreshAfterTradeMutation();
       return res;
     } catch (err) {
       console.error('Failed to add trade:', err);
@@ -318,16 +366,12 @@ export const useTradeStore = defineStore('trade', () => {
   // Update a trade
   const updateTrade = async (id, updates) => {
     try {
-      // Call API
-      let targetId = id;
-      if (!isMongoObjectId(targetId) && looksLikeTimestampId(targetId)) {
-        await refreshAfterTradeMutation();
-        const matched = trades.value.find(t => String(t?.timestamp) === String(targetId));
-        if (matched?.id && isMongoObjectId(matched.id)) targetId = matched.id;
-      }
+      // 将 timestamp id 解析为 MongoDB id，避免触发全量刷新
+      const targetId = await resolveTimestampId(id);
 
       const res = await apiUpdateTrade(targetId, updates);
-      await refreshAfterTradeMutation();
+      // 后台刷新，不阻塞调用方
+      runRefreshAfterTradeMutation();
       return res;
     } catch (err) {
       console.error('Failed to update trade:', err);
@@ -339,25 +383,26 @@ export const useTradeStore = defineStore('trade', () => {
   const deleteHolding = async (symbol) => {
     // If symbol is null or empty, we might be trying to clean up "orphan" records
     const targetSymbol = symbol ? normalizeSymbol(symbol) : '';
-    
+
     try {
       // 1. 同步删除后端数据 (仅当 symbol 有值时)
       if (targetSymbol) {
         const res = await deleteTradeBySymbol(targetSymbol);
 
-        await refreshAfterTradeMutation({ symbol: lastTradeReviewsParams.value?.symbol });
+        // 后台刷新，不阻塞调用方
+        runRefreshAfterTradeMutation({ symbol: lastTradeReviewsParams.value?.symbol });
         return res;
       }
 
       // 2. 如果没有传 symbol，清理掉所有 symbol 为空的异常记录
       trades.value = trades.value.filter(t => !!t.symbol);
-      
+
       // 3. 强制重置资产概览状态
-      assetsSummary.value = null; 
-      
+      assetsSummary.value = null;
+
       // 4. 保存本地备份
       saveTrades();
-      
+
       // 5. 如果数据全空，清理本地缓存
       if (trades.value.length === 0 && transferRecords.value.length === 0) {
         uni.removeStorageSync('stock_review_trades');
@@ -525,16 +570,13 @@ export const useTradeStore = defineStore('trade', () => {
   const deleteTrade = async (id) => {
     if (!id) return;
     try {
-      let targetId = id;
-      if (!isMongoObjectId(targetId) && looksLikeTimestampId(targetId)) {
-        await refreshAfterTradeMutation();
-        const matched = trades.value.find(t => String(t?.timestamp) === String(targetId));
-        if (matched?.id && isMongoObjectId(matched.id)) targetId = matched.id;
-      }
+      // 将 timestamp id 解析为 MongoDB id，避免触发全量刷新
+      const targetId = await resolveTimestampId(id);
 
       await deleteTradeById(targetId);
 
-      await refreshAfterTradeMutation();
+      // 后台刷新，不阻塞调用方
+      runRefreshAfterTradeMutation();
     } catch (err) {
       console.error('Failed to delete trade:', err);
       throw err;
@@ -753,6 +795,8 @@ export const useTradeStore = defineStore('trade', () => {
     cash,
     holdingsMarketValue,
     totalHoldingsCount,
+    loading,
+    refreshing,
     marketOverview,
     commissionPreference,
     fetchCommissionPreference,
