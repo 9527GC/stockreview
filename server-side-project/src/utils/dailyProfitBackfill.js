@@ -4,7 +4,7 @@ const { Asset } = require('../models/Asset');
 const { Trade } = require('../models/Trade');
 const Transfer = require('../models/Transfer');
 const { getRates } = require('./currency');
-const { getStockHistoricalQuotesMap } = require('./historicalQuotes');
+const { getQuotesForRange } = require('./historicalQuoteCache');
 const { calculateCashAndPrincipalCNY } = require('./ledger');
 const { round2 } = require('./pnl');
 const { normalizeSymbol } = require('./symbol');
@@ -28,12 +28,6 @@ const getDatesBetween = (startDateStr, endDateStr) => {
 const getPreviousDateStr = (dateStr) => {
   const d = new Date(dateStr);
   d.setDate(d.getDate() - 1);
-  return d.toISOString().slice(0, 10);
-};
-
-const getNextDateStr = (dateStr) => {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + 1);
   return d.toISOString().slice(0, 10);
 };
 
@@ -78,6 +72,11 @@ const applyTradeToHoldings = (holdings, trade) => {
  * - dailyReturn = dailyProfitAmount / 昨日总资产 * 100
  * - cumulativeReturn = (今日总资产 - 本金) / 本金 * 100
  * - cumulativeProfitAmount = 今日总资产 - 本金
+ *
+ * 优化点：
+ * 1. 优先使用 startDateStr 前一天的缓存作为起点，只回填从 startDateStr 到今日的窗口
+ * 2. 现金/本金使用增量累加，避免每天重复全量计算
+ * 3. 历史行情通过 HistoricalQuote 缓存批量获取，减少外部请求
  */
 const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT_OFFSET_MINUTES) => {
   const todayStr = getDateStringInOffset(offsetMinutes);
@@ -94,73 +93,121 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
 
   const dateStrOf = (date) => getDateStringInOffset(offsetMinutes, date);
 
-  const firstTradeDate = tradesAsc.length > 0 ? dateStrOf(tradesAsc[0].date) : null;
-  const firstTransferDate = transfers.length > 0 ? dateStrOf(transfers[0].date) : null;
-  const earliestDate = [firstTradeDate, firstTransferDate, startDateStr].filter(Boolean).sort()[0];
-
-  // P2 增量回填：
-  // 若已有缓存数据比 earliestDate 新（含相等），说明从 earliestDate 到 lastExisting.date
-  // 的历史收益可能已经过时（例如补录了更早的交易），需要从 earliestDate 开始重新计算，
-  // 并取 earliestDate 前一天的缓存作为 prevTotalAssets；
-  // 若 lastExisting 早于 earliestDate，则其 totalAssets 可作为 prevTotalAssets。
-  const lastExisting = await DailyProfit.findOne({ userId }).sort({ date: -1 }).lean();
+  const currentHoldings = new Map();
+  let cashCNY = 0;
+  let principalCNY = 0;
   let prevTotalAssets = null;
-  let recomputeStartDate = earliestDate;
-  if (lastExisting && lastExisting.date >= earliestDate) {
-    const prevDateStr = getPreviousDateStr(earliestDate);
-    const prevRecord = await DailyProfit.findOne({ userId, date: prevDateStr }).lean();
-    prevTotalAssets = prevRecord ? Number(prevRecord.totalAssets) || null : null;
-    recomputeStartDate = earliestDate;
-  } else if (lastExisting) {
-    prevTotalAssets = Number(lastExisting.totalAssets) || null;
+  let tradeIndex = 0;
+  let recomputeStartDate = startDateStr;
+
+  // 尝试使用 startDateStr 前一天的缓存作为起点，实现增量回填
+  const prevDateStr = getPreviousDateStr(startDateStr);
+  const prevRecord = await DailyProfit.findOne({ userId, date: prevDateStr }).lean();
+
+  if (prevRecord) {
+    prevTotalAssets = Number.isFinite(prevRecord.totalAssets) ? Number(prevRecord.totalAssets) : null;
+
+    // 应用截止到前一天的所有交易
+    while (tradeIndex < tradesAsc.length && dateStrOf(tradesAsc[tradeIndex].date) <= prevDateStr) {
+      applyTradeToHoldings(currentHoldings, tradesAsc[tradeIndex]);
+      tradeIndex++;
+    }
+
+    // 截止到前一天的现金与本金
+    const upToPrevTransfers = transfers.filter(t => dateStrOf(t.date) <= prevDateStr);
+    const upToPrevTrades = tradesAsc.slice(0, tradeIndex);
+    const ledger = calculateCashAndPrincipalCNY({
+      transfers: upToPrevTransfers,
+      trades: upToPrevTrades,
+      rates
+    });
+    cashCNY = ledger.cashCNY;
+    principalCNY = ledger.principalCNY;
+  } else {
+    // 无前一天缓存，回退到全量回填
+    const firstTradeDate = tradesAsc.length > 0 ? dateStrOf(tradesAsc[0].date) : null;
+    const firstTransferDate = transfers.length > 0 ? dateStrOf(transfers[0].date) : null;
+    recomputeStartDate = [firstTradeDate, firstTransferDate, startDateStr].filter(Boolean).sort()[0];
+    if (!recomputeStartDate) {
+      return { success: true, updatedCount: 0, skippedCount: 0 };
+    }
   }
 
-  // 只生成需要回填的日期
   const dates = getDatesBetween(recomputeStartDate, todayStr);
   if (dates.length === 0) {
     return { success: true, updatedCount: 0, skippedCount: 0 };
   }
 
-  const netTransferFlowOnDate = (dateStr) => {
-    let net = 0;
-    transfers.forEach((t) => {
-      if (dateStrOf(t.date) !== dateStr) return;
+  // 按日期分组交易和转账，便于增量更新
+  const tradesByDate = new Map();
+  for (const trade of tradesAsc) {
+    const d = dateStrOf(trade.date);
+    if (!tradesByDate.has(d)) tradesByDate.set(d, []);
+    tradesByDate.get(d).push(trade);
+  }
+
+  const transfersByDate = new Map();
+  for (const t of transfers) {
+    const d = dateStrOf(t.date);
+    if (!transfersByDate.has(d)) transfersByDate.set(d, []);
+    transfersByDate.get(d).push(t);
+  }
+
+  // 收集窗口内所有会用到行情的 symbol
+  const symbolsInWindow = new Set(Array.from(currentHoldings.keys()));
+  for (const trade of tradesAsc) {
+    symbolsInWindow.add(normalizeSymbol(trade.symbol));
+  }
+
+  // 批量预取并缓存窗口内的历史行情
+  const quoteMap = await getQuotesForRange(Array.from(symbolsInWindow), recomputeStartDate, todayStr);
+
+  const dailyProfits = [];
+  const dailyRevenues = [];
+
+  for (const dateStr of dates) {
+    // 应用当天交易并同步更新现金
+    const dayTrades = tradesByDate.get(dateStr) || [];
+    for (const trade of dayTrades) {
+      applyTradeToHoldings(currentHoldings, trade);
+
+      const currency = trade.currency || 'CNY';
+      const rate = rates[currency] || 1;
+      const tradeAmountCNY = (Number(trade.price) || 0) * (Number(trade.quantity) || 0) * rate;
+      const commissionCNY = (Number(trade.commission) || 0) * rate;
+
+      if (trade.type === 'BUY') {
+        cashCNY -= tradeAmountCNY + commissionCNY;
+      } else if (trade.type === 'SELL') {
+        cashCNY += tradeAmountCNY - commissionCNY;
+      }
+    }
+
+    // 应用当天转账并同步更新现金与本金
+    const dayTransfers = transfersByDate.get(dateStr) || [];
+    let transferFlow = 0;
+    for (const t of dayTransfers) {
       const currency = t.currency || 'CNY';
       const rate = rates[currency] || 1;
       const amountCNY = (Number(t.amount) || 0) * rate;
-      net += t.type === 'IN' ? amountCNY : -amountCNY;
-    });
-    return net;
-  };
 
-  const currentHoldings = new Map();
-  const dailyProfits = [];
-  const dailyRevenues = [];
-  let tradeIndex = 0;
-
-  for (const dateStr of dates) {
-    // 应用截至当前交易日（含）的所有交易
-    while (tradeIndex < tradesAsc.length && dateStrOf(tradesAsc[tradeIndex].date) <= dateStr) {
-      applyTradeToHoldings(currentHoldings, tradesAsc[tradeIndex]);
-      tradeIndex++;
+      if (t.type === 'IN') {
+        cashCNY += amountCNY;
+        principalCNY += amountCNY;
+        transferFlow += amountCNY;
+      } else if (t.type === 'OUT') {
+        cashCNY -= amountCNY;
+        principalCNY -= amountCNY;
+        transferFlow -= amountCNY;
+      }
     }
-
-    const dayStart = parseDateInOffset(`${dateStr} 00:00:00`, offsetMinutes);
-    const dayTransfers = transfers.filter(t => dateStrOf(t.date) <= dateStr);
-    const dayTrades = tradesAsc.slice(0, tradeIndex);
-
-    const { cashCNY, principalCNY } = calculateCashAndPrincipalCNY({
-      transfers: dayTransfers,
-      trades: dayTrades,
-      rates
-    });
 
     const symbolsOnDate = Array.from(currentHoldings.keys());
     let holdingsMarketValue = 0;
     const missingQuoteSymbols = [];
 
     if (symbolsOnDate.length > 0) {
-      const quotes = await getStockHistoricalQuotesMap(symbolsOnDate, dateStr);
+      const quotes = quoteMap.get(dateStr) || {};
 
       currentHoldings.forEach((holding) => {
         const symbol = normalizeSymbol(holding.symbol);
@@ -180,10 +227,12 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
     }
 
     holdingsMarketValue = round2(holdingsMarketValue);
+    cashCNY = round2(cashCNY);
+    principalCNY = round2(principalCNY);
     const totalAssets = round2(cashCNY + holdingsMarketValue);
 
     // 今日净资金流入需要从收益中剔除
-    const transferFlow = round2(netTransferFlowOnDate(dateStr));
+    transferFlow = round2(transferFlow);
     const dailyProfitAmount = prevTotalAssets !== null
       ? round2(totalAssets - prevTotalAssets - transferFlow)
       : 0;
@@ -217,7 +266,7 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
       cumulativeRevenue: cumulativeProfitAmount,
       cumulativeReturnRate: cumulativeReturn,
       totalAssets,
-      cash: round2(cashCNY),
+      cash: cashCNY,
       holdingsMarketValue,
       source,
       isDirty: false
@@ -272,7 +321,7 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
   return {
     success: true,
     updatedCount: dailyProfits.length,
-    startDate: earliestDate,
+    startDate: recomputeStartDate,
     endDate: todayStr
   };
 };

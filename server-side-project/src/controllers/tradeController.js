@@ -10,13 +10,27 @@ const { calculateCashAndPrincipalCNY } = require('../utils/ledger');
 const { round2, calculateDailyProfitFromPosition } = require('../utils/pnl');
 const { normalizeSymbol, buildSymbolAliases } = require('../utils/symbol');
 const { calculateDilutedPerformance, calculateDilutedProfits } = require('../utils/cost');
-const { backfillDailyProfit, upsertTodayDailyProfit } = require('../utils/dailyProfitBackfill');
+const { upsertTodayDailyProfit } = require('../utils/dailyProfitBackfill');
 const { sanitizeHtml } = require('../utils/sanitizeHtml');
 const { getDateStringInOffset, getQuoteDateKeyInOffset } = require('../utils/dailyProfit');
 const messages = require('../utils/errorMessages');
 const dirtyDataManager = require('../services/dirtyDataManager');
-const DailyProfit = require('../models/DailyProfit');
-const DailyRevenue = require('../models/DailyRevenue');
+
+/**
+ * 触发脏数据后台重算。
+ * 生产环境立即返回响应，由后台异步执行；测试环境等待重算完成，确保测试断言可靠。
+ */
+const scheduleRecalc = async (userId, tradeDateStr) => {
+  await dirtyDataManager.markDirtyFromDate(userId, tradeDateStr);
+  const recalcPromise = dirtyDataManager.asyncRecalculate(userId);
+  if (process.env.NODE_ENV === 'test') {
+    await recalcPromise;
+  } else {
+    recalcPromise.catch(err => {
+      console.error('[Trade] Error starting async recalculation:', err);
+    });
+  }
+};
 
 const marketFromTrade = (trade) => {
   const ex = String(trade?.market || '').toUpperCase();
@@ -639,13 +653,8 @@ exports.deleteHolding = async (req, res) => {
     await upsertTodayDailyProfit(userId);
 
     if (earliestDateStr) {
-      // 删除持仓会影响从最早交易日到今天的所有历史收益，标记脏数据并清除该日期之后的缓存，强制完整重算
-      dirtyDataManager.markDirtyFromDate(userId, earliestDateStr).catch(err => {
-        console.error('[Trade] Error marking dirty data:', err);
-      });
-      await DailyProfit.deleteMany({ userId, date: { $gte: earliestDateStr } });
-      await DailyRevenue.deleteMany({ userId, date: { $gte: earliestDateStr } });
-      await backfillDailyProfit(userId, earliestDateStr);
+      // 删除持仓会影响从最早交易日到今天的所有历史收益，标记脏数据后由后台异步重算
+      await scheduleRecalc(userId, earliestDateStr);
     }
 
     res.json({
@@ -789,13 +798,9 @@ exports.addTrade = async (req, res) => {
     await rebuildAssetFromLedger(req.user._id);
     await upsertTodayDailyProfit(req.user._id);
 
-    // 标记脏数据：从交易日期开始重新计算
+    // 标记脏数据：从交易日期开始由后台异步重新计算
     const tradeDateStr = trade.date.toISOString().slice(0, 10);
-    dirtyDataManager.markDirtyFromDate(req.user._id, tradeDateStr).catch(err => {
-      console.error('[Trade] Error marking dirty data:', err);
-    });
-
-    await backfillDailyProfit(req.user._id, tradeDateStr);
+    await scheduleRecalc(req.user._id, tradeDateStr);
 
     // 更新用户手续费偏好（按市场记录最近一次的 mode 和数值）
     const feeMarket = marketFromTrade({ market: tradeMarket, symbol });
@@ -947,10 +952,7 @@ exports.updateTrade = async (req, res) => {
     await upsertTodayDailyProfit(req.user._id);
 
     const tradeDateStr = trade.date.toISOString().slice(0, 10);
-    dirtyDataManager.markDirtyFromDate(req.user._id, tradeDateStr).catch(err => {
-      console.error('[Trade] Error marking dirty data:', err);
-    });
-    await backfillDailyProfit(req.user._id, tradeDateStr);
+    await scheduleRecalc(req.user._id, tradeDateStr);
 
     res.json(trade);
   } catch (error) {
@@ -1027,14 +1029,10 @@ exports.deleteTradeById = async (req, res) => {
     
     await rebuildAssetFromLedger(req.user._id);
     await upsertTodayDailyProfit(req.user._id);
-    
-    // 标记脏数据：从交易日期开始重新计算
+
+    // 标记脏数据：从交易日期开始由后台异步重新计算
     const tradeDateStr = trade.date.toISOString().slice(0, 10);
-    dirtyDataManager.markDirtyFromDate(req.user._id, tradeDateStr).catch(err => {
-      console.error('[Trade] Error marking dirty data:', err);
-    });
-    
-    await backfillDailyProfit(req.user._id, tradeDateStr);
+    await scheduleRecalc(req.user._id, tradeDateStr);
 
     res.json({ message: 'Trade deleted successfully', id });
   } catch (error) {

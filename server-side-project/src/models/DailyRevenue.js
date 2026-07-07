@@ -76,5 +76,7 @@ const dailyRevenueSchema = new mongoose.Schema({
 dailyRevenueSchema.index({ userId: 1, date: 1 }, { unique: true });
 // 索引：查询脏数据
 dailyRevenueSchema.index({ userId: 1, isDirty: 1 });
+// 索引：按日期扫描脏数据
+dailyRevenueSchema.index({ userId: 1, isDirty: 1, date: 1 });
 
 module.exports = mongoose.model('DailyRevenue', dailyRevenueSchema);

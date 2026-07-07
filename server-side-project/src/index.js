@@ -48,6 +48,7 @@ const marketRoutes = require('./routes/marketRoutes');
 const { startProfitHistoryScheduler } = require('./jobs/profitHistoryScheduler');
 const { startMarketSnapshotScheduler } = require('./jobs/marketSnapshotScheduler');
 const profitCurveScheduler = require('./services/profitCurveScheduler');
+const dirtyDataManager = require('./services/dirtyDataManager');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -150,6 +151,19 @@ mongoose.connect(process.env.MONGODB_URI)
       startMarketSnapshotScheduler();
       // Start profit curve scheduler (daily at 2:00 AM)
       profitCurveScheduler.start();
+
+      // 启动脏数据兜底恢复：服务启动 30 秒后扫描一次，之后每 10 分钟扫描一次
+      setTimeout(() => {
+        dirtyDataManager.cleanAllDirty().catch(err => {
+          console.error('[DirtyData] Startup recovery failed:', err);
+        });
+      }, 30 * 1000);
+
+      setInterval(() => {
+        dirtyDataManager.cleanAllDirty().catch(err => {
+          console.error('[DirtyData] Periodic recovery failed:', err);
+        });
+      }, 10 * 60 * 1000);
 
       const HOST = process.env.HOST || '0.0.0.0';
       app.listen(PORT, HOST, () => {
