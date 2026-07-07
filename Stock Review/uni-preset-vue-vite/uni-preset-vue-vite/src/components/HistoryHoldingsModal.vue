@@ -6,6 +6,7 @@
     :footer="null"
     width="1000px"
     centered
+    wrapClassName="history-holdings-modal"
   >
     <a-table
       :columns="columns"
@@ -120,7 +121,7 @@ const historyHoldings = ref([]);
 const currentPage = ref(1);
 const pageSize = ref(20);
 const total = ref(0);
-const sort = ref('-lastTradeDate');
+const sort = ref('-cumulativeProfit');
 const expandedRowKeys = ref([]);
 const expandedBySymbol = ref({});
 
@@ -260,7 +261,7 @@ const handleTableChange = (paginationConfig, filters, sorterConfig) => {
     const prefix = s.order === 'descend' ? '-' : '';
     sort.value = `${prefix}${s.field}`;
   } else if (s && s.field && !s.order) {
-    sort.value = '-lastTradeDate';
+    sort.value = '-cumulativeProfit';
   }
 
   fetchHistoryHoldings();
@@ -378,7 +379,7 @@ watch(
   (isOpen) => {
     if (isOpen) {
       currentPage.value = 1;
-      sort.value = '-lastTradeDate';
+      sort.value = '-cumulativeProfit';
       fetchHistoryHoldings();
     } else {
       historyHoldings.value = [];
@@ -396,6 +397,18 @@ watch(
   display: inline-block;
   padding-left: 8px;
   white-space: nowrap;
+}
+
+.history-holdings-modal :deep(.ant-modal-content) {
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.history-holdings-modal :deep(.ant-modal-body) {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 :deep(.ant-table-expanded-row-fixed) {
