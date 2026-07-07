@@ -9,7 +9,7 @@ const { getDayRangeInOffset, parseDateInOffset } = require('../utils/datetime');
 const { calculateCashAndPrincipalCNY } = require('../utils/ledger');
 const { round2, calculateDailyProfitFromPosition } = require('../utils/pnl');
 const { normalizeSymbol, buildSymbolAliases } = require('../utils/symbol');
-const { calculateDilutedPerformance, calculateDilutedProfits } = require('../utils/cost');
+const { calculateDilutedPerformance, calculateDilutedProfits, calculatePositionZeroGroups } = require('../utils/cost');
 const { upsertTodayDailyProfit } = require('../utils/dailyProfitBackfill');
 const { sanitizeHtml } = require('../utils/sanitizeHtml');
 const { getDateStringInOffset, getQuoteDateKeyInOffset } = require('../utils/dailyProfit');
@@ -624,6 +624,81 @@ exports.getHistoryHoldings = async (req, res) => {
       }),
       total
     });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.getHistoryHoldingGroups = async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const userId = req.user._id;
+
+    if (!symbol) {
+      return res.status(400).json({ message: 'Symbol is required' });
+    }
+
+    const normalizedSymbol = normalizeSymbol(symbol);
+    const aliases = buildSymbolAliases(normalizedSymbol);
+    const symbolSet = Array.from(new Set([normalizedSymbol, ...aliases]));
+
+    const [rates, trades] = await Promise.all([
+      getRates(),
+      Trade.find({ userId, symbol: { $in: symbolSet } }).sort({ date: 1, _id: 1 }).lean()
+    ]);
+
+    const groups = calculatePositionZeroGroups({ trades, rates });
+
+    res.json({ list: groups });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.batchGetHistoryHoldingGroups = async (req, res) => {
+  try {
+    const { symbols } = req.body;
+    const userId = req.user._id;
+
+    if (!Array.isArray(symbols) || symbols.length === 0) {
+      return res.status(400).json({ message: 'symbols 数组不能为空' });
+    }
+
+    const normalizedSymbols = Array.from(new Set(
+      symbols.map(s => normalizeSymbol(s)).filter(Boolean)
+    ));
+    if (normalizedSymbols.length === 0) {
+      return res.status(400).json({ message: 'symbols 中无有效股票代码' });
+    }
+
+    const allSymbols = Array.from(new Set(
+      normalizedSymbols.flatMap(s => {
+        const aliases = buildSymbolAliases(s);
+        return [s, ...aliases];
+      })
+    ));
+
+    const [rates, trades] = await Promise.all([
+      getRates(),
+      Trade.find({ userId, symbol: { $in: allSymbols } }).sort({ date: 1, _id: 1 }).lean()
+    ]);
+
+    const tradesBySymbol = new Map();
+    trades.forEach((t) => {
+      const key = normalizeSymbol(t.symbol);
+      if (!tradesBySymbol.has(key)) {
+        tradesBySymbol.set(key, []);
+      }
+      tradesBySymbol.get(key).push(t);
+    });
+
+    const list = normalizedSymbols.map((symbol) => {
+      const symbolTrades = tradesBySymbol.get(symbol) || [];
+      const groups = calculatePositionZeroGroups({ trades: symbolTrades, rates });
+      return { symbol, groups };
+    });
+
+    res.json({ list });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

@@ -1,5 +1,9 @@
 const request = require('supertest');
 
+jest.mock('../src/utils/currency', () => ({
+  getRates: jest.fn(() => Promise.resolve({ CNY: 1, USD: 7.2, HKD: 0.92 }))
+}));
+
 const app = require('../src/index');
 const User = require('../src/models/User');
 const { Trade, Holding } = require('../src/models/Trade');
@@ -128,5 +132,285 @@ describe('Trade API', () => {
       });
     expect(res.statusCode).toBe(400);
     expect(res.body.message).toContain('Sell quantity exceeds holding quantity');
+  });
+});
+
+describe('GET /api/trades/history-holdings/:symbol/groups', () => {
+  test('单次买入清仓应返回一个分仓，实现盈亏正确', async () => {
+    await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '600519.SH',
+        type: 'BUY',
+        price: 10,
+        quantity: 100,
+        commission: 0,
+        date: '2026-06-01T09:30:00+08:00',
+        name: '贵州茅台'
+      });
+
+    await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '600519.SH',
+        type: 'SELL',
+        price: 12,
+        quantity: 100,
+        commission: 0,
+        date: '2026-06-02T14:30:00+08:00',
+        name: '贵州茅台'
+      });
+
+    const res = await request(app)
+      .get('/api/trades/history-holdings/600519.SH/groups')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.list).toHaveLength(1);
+    expect(res.body.list[0].realizedProfit).toBe(200);
+    expect(res.body.list[0].tradesCount).toBe(2);
+    expect(res.body.list[0].profitRate).toBeCloseTo(0.2, 4);
+  });
+
+  test('同一股票多次清仓应产生多个分仓', async () => {
+    const trades = [
+      { symbol: '600519.SH', type: 'BUY', price: 10, quantity: 100, date: '2026-06-01T09:30:00+08:00', name: '贵州茅台' },
+      { symbol: '600519.SH', type: 'SELL', price: 12, quantity: 100, date: '2026-06-02T14:30:00+08:00', name: '贵州茅台' },
+      { symbol: '600519.SH', type: 'BUY', price: 15, quantity: 200, date: '2026-06-03T09:30:00+08:00', name: '贵州茅台' },
+      { symbol: '600519.SH', type: 'SELL', price: 18, quantity: 200, date: '2026-06-04T14:30:00+08:00', name: '贵州茅台' }
+    ];
+
+    for (const t of trades) {
+      await request(app)
+        .post('/api/trades')
+        .set('Authorization', `Bearer ${token}`)
+        .send(t);
+    }
+
+    const res = await request(app)
+      .get('/api/trades/history-holdings/600519.SH/groups')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.list).toHaveLength(2);
+    expect(res.body.list[0].realizedProfit).toBe(200);
+    expect(res.body.list[1].realizedProfit).toBe(600);
+  });
+
+  test('部分卖出后未归零不应产生新分仓', async () => {
+    await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '600519.SH',
+        type: 'BUY',
+        price: 10,
+        quantity: 100,
+        date: '2026-06-01T09:30:00+08:00',
+        name: '贵州茅台'
+      });
+
+    await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '600519.SH',
+        type: 'SELL',
+        price: 12,
+        quantity: 30,
+        date: '2026-06-02T14:30:00+08:00',
+        name: '贵州茅台'
+      });
+
+    await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '600519.SH',
+        type: 'SELL',
+        price: 13,
+        quantity: 70,
+        date: '2026-06-03T14:30:00+08:00',
+        name: '贵州茅台'
+      });
+
+    const res = await request(app)
+      .get('/api/trades/history-holdings/600519.SH/groups')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.list).toHaveLength(1);
+    expect(res.body.list[0].tradesCount).toBe(3);
+  });
+
+  test('手续费应影响实现盈亏', async () => {
+    await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '600519.SH',
+        type: 'BUY',
+        price: 10,
+        quantity: 100,
+        commission: 10,
+        date: '2026-06-01T09:30:00+08:00',
+        name: '贵州茅台'
+      });
+
+    await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '600519.SH',
+        type: 'SELL',
+        price: 12,
+        quantity: 100,
+        commission: 10,
+        date: '2026-06-02T14:30:00+08:00',
+        name: '贵州茅台'
+      });
+
+    const res = await request(app)
+      .get('/api/trades/history-holdings/600519.SH/groups')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.list).toHaveLength(1);
+    expect(res.body.list[0].realizedProfit).toBe(180);
+  });
+
+  test('港股交易应按汇率换算为 CNY', async () => {
+    await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '00700.HK',
+        type: 'BUY',
+        price: 100,
+        quantity: 100,
+        commission: 0,
+        date: '2026-06-01T09:30:00+08:00',
+        name: '腾讯控股'
+      });
+
+    await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '00700.HK',
+        type: 'SELL',
+        price: 110,
+        quantity: 100,
+        commission: 0,
+        date: '2026-06-02T14:30:00+08:00',
+        name: '腾讯控股'
+      });
+
+    const res = await request(app)
+      .get('/api/trades/history-holdings/00700.HK/groups')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.list).toHaveLength(1);
+    // (11000 - 10000) * 0.92 = 920
+    expect(res.body.list[0].realizedProfit).toBe(920);
+    expect(res.body.list[0].currency).toBe('HKD');
+  });
+
+  test('无交易的股票应返回空列表', async () => {
+    const res = await request(app)
+      .get('/api/trades/history-holdings/000001.SZ/groups')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.list).toEqual([]);
+  });
+});
+
+describe('POST /api/trades/history-holdings/groups/batch', () => {
+  test('应一次性返回多只股票的历史清仓分组', async () => {
+    // 600519.SH 一次完整清仓
+    await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '600519.SH',
+        type: 'BUY',
+        price: 10,
+        quantity: 100,
+        commission: 0,
+        date: '2026-06-01T09:30:00+08:00',
+        name: '贵州茅台'
+      });
+    await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '600519.SH',
+        type: 'SELL',
+        price: 12,
+        quantity: 100,
+        commission: 0,
+        date: '2026-06-02T14:30:00+08:00',
+        name: '贵州茅台'
+      });
+
+    // 00700.HK 一次完整清仓
+    await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '00700.HK',
+        type: 'BUY',
+        price: 100,
+        quantity: 100,
+        commission: 0,
+        date: '2026-06-01T09:30:00+08:00',
+        name: '腾讯控股'
+      });
+    await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '00700.HK',
+        type: 'SELL',
+        price: 110,
+        quantity: 100,
+        commission: 0,
+        date: '2026-06-02T14:30:00+08:00',
+        name: '腾讯控股'
+      });
+
+    const res = await request(app)
+      .post('/api/trades/history-holdings/groups/batch')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ symbols: ['600519.SH', '00700.HK', '000001.SZ'] });
+
+    expect(res.statusCode).toBe(200);
+    expect(Array.isArray(res.body.list)).toBe(true);
+    expect(res.body.list).toHaveLength(3);
+
+    const bySymbol = Object.fromEntries(res.body.list.map(item => [item.symbol, item.groups]));
+    expect(bySymbol['600519.SH']).toHaveLength(1);
+    expect(bySymbol['600519.SH'][0].realizedProfit).toBe(200);
+    expect(bySymbol['00700.HK']).toHaveLength(1);
+    expect(bySymbol['00700.HK'][0].realizedProfit).toBe(920);
+    expect(bySymbol['000001.SZ']).toEqual([]);
+  });
+
+  test('symbols 为空或不合法时应返回 400', async () => {
+    const res1 = await request(app)
+      .post('/api/trades/history-holdings/groups/batch')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ symbols: [] });
+    expect(res1.statusCode).toBe(400);
+
+    const res2 = await request(app)
+      .post('/api/trades/history-holdings/groups/batch')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ symbols: ['', '   '] });
+    expect(res2.statusCode).toBe(400);
   });
 });

@@ -25,38 +25,66 @@
         <span class="expand-column-title">详情</span>
       </template>
       <template #expandedRowRender="{ record }">
-        <a-table
-          :columns="innerColumns"
-          :data-source="getExpandedTrades(record.symbol)"
-          :loading="isExpandedLoading(record.symbol)"
-          :pagination="getExpandedPagination(record.symbol)"
-          @change="(p) => handleExpandedTableChange(record.symbol, p)"
+        <div v-if="isExpandedLoading(record.symbol)" class="group-loading">
+          <a-spin />
+        </div>
+        <a-empty v-else-if="getExpandedGroups(record.symbol).length === 0" description="暂无交易记录" />
+        <a-collapse
+          v-else
+          :activeKey="getExpandedActiveKey(record.symbol)"
+          @change="(keys) => setExpandedActiveKey(record.symbol, keys)"
           size="small"
-          :row-key="t => t.id"
         >
-          <template #bodyCell="{ column, record: trade }">
-            <template v-if="column.key === 'type'">
-              <a-tag :color="trade.type === 'BUY' ? 'red' : 'green'">
-                {{ trade.type === 'BUY' ? '买入' : '卖出' }}
-              </a-tag>
+          <a-collapse-panel
+            v-for="group in getExpandedGroups(record.symbol)"
+            :key="group.groupId"
+          >
+            <template #header>
+              <div class="group-header">
+                <span class="group-title">第 {{ group.groupId }} 次分仓</span>
+                <span>清仓 {{ dayjs(group.endDate).format('YYYY-MM-DD') }}</span>
+                <span :class="group.realizedProfit >= 0 ? 'profit' : 'loss'">
+                  {{ group.realizedProfit >= 0 ? '+' : '' }}{{ group.realizedProfit.toFixed(2) }}
+                </span>
+                <span :class="group.profitRate >= 0 ? 'profit' : 'loss'">
+                  {{ group.profitRate >= 0 ? '+' : '' }}{{ (group.profitRate * 100).toFixed(2) }}%
+                </span>
+                <span>共 {{ group.tradesCount }} 笔</span>
+                <a-tag v-if="group.hasAnomaly" color="orange" size="small">数据异常</a-tag>
+              </div>
             </template>
-            <template v-if="column.key === 'date'">
-              {{ dayjs(trade.date).format('YYYY-MM-DD HH:mm') }}
-            </template>
-            <template v-if="column.key === 'amount'">
-              {{ getCurrencySymbol(trade.currency) }}{{ (trade.price * trade.quantity).toFixed(2) }}
-            </template>
-            <template v-if="column.key === 'action'">
-              <a-button type="link" size="small" @click="handleEdit(trade)">编辑</a-button>
-              <a-popconfirm
-                title="确定要删除这条交易记录吗？"
-                @confirm="handleDeleteTrade(trade.id, record.symbol)"
-              >
-                <a-button type="link" danger size="small">删除</a-button>
-              </a-popconfirm>
-            </template>
-          </template>
-        </a-table>
+            <a-table
+              :columns="innerColumns"
+              :data-source="group.trades"
+              :row-key="t => t.id"
+              size="small"
+              :pagination="false"
+            >
+              <template #bodyCell="{ column, record: trade }">
+                <template v-if="column.key === 'type'">
+                  <a-tag :color="trade.type === 'BUY' ? 'red' : 'green'">
+                    {{ trade.type === 'BUY' ? '买入' : '卖出' }}
+                  </a-tag>
+                </template>
+                <template v-if="column.key === 'date'">
+                  {{ dayjs(trade.date).format('YYYY-MM-DD HH:mm') }}
+                </template>
+                <template v-if="column.key === 'amount'">
+                  {{ getCurrencySymbol(trade.currency) }}{{ (trade.price * trade.quantity).toFixed(2) }}
+                </template>
+                <template v-if="column.key === 'action'">
+                  <a-button type="link" size="small" @click="handleEdit(trade)">编辑</a-button>
+                  <a-popconfirm
+                    title="确定要删除这条交易记录吗？"
+                    @confirm="handleDeleteTrade(trade.id, record.symbol)"
+                  >
+                    <a-button type="link" danger size="small">删除</a-button>
+                  </a-popconfirm>
+                </template>
+              </template>
+            </a-table>
+          </a-collapse-panel>
+        </a-collapse>
       </template>
       
       <template #bodyCell="{ column, record }">
@@ -102,7 +130,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue';
 import { useTradeStore } from '@/stores/trade';
-import { getHistoryHoldings, getTradeReviews } from '@/api/index';
+import { getHistoryHoldings, getHistoryHoldingGroups } from '@/api/index';
 import { message } from 'ant-design-vue';
 import dayjs from 'dayjs';
 import { normalizeSymbol } from '@/utils/stock';
@@ -145,10 +173,7 @@ const ensureExpandedState = (symbol) => {
     map[key] = {
       list: [],
       loading: false,
-      current: 1,
-      pageSize: 20,
-      total: 0,
-      hasTotal: false
+      activeKey: []
     };
   }
   return map[key];
@@ -170,24 +195,14 @@ const fetchHistoryHoldings = async () => {
   }
 };
 
-const fetchExpandedTrades = async (symbol) => {
+const fetchExpandedGroups = async (symbol) => {
   const key = normalizeSymbol(symbol);
   const state = ensureExpandedState(key);
   state.loading = true;
   try {
-    const res = await getTradeReviews({
-      symbol: key,
-      page: state.current,
-      pageSize: state.pageSize
-    });
+    const res = await getHistoryHoldingGroups(key);
     state.list = Array.isArray(res?.list) ? res.list : [];
-    if (typeof res?.total === 'number') {
-      state.total = res.total;
-      state.hasTotal = true;
-    } else {
-      state.total = 0;
-      state.hasTotal = false;
-    }
+    state.activeKey = state.list.length > 0 ? [state.list[0].groupId] : [];
   } finally {
     state.loading = false;
   }
@@ -221,9 +236,7 @@ const handleDeleteTrade = async (id, symbol) => {
     message.success('交易记录已删除');
 
     if (symbol) {
-      const state = ensureExpandedState(symbol);
-      state.current = 1;
-      fetchExpandedTrades(symbol);
+      fetchExpandedGroups(symbol);
     }
     fetchHistoryHoldings();
     emit('changed', symbol);
@@ -244,9 +257,7 @@ const onEditSuccess = async () => {
   message.success('交易记录已更新');
 
   if (editingSymbol.value) {
-    const state = ensureExpandedState(editingSymbol.value);
-    state.current = 1;
-    fetchExpandedTrades(editingSymbol.value);
+    fetchExpandedGroups(editingSymbol.value);
   }
   fetchHistoryHoldings();
   emit('changed', editingSymbol.value);
@@ -279,47 +290,33 @@ const handleExpand = (expanded, record) => {
   if (expanded) {
     const state = ensureExpandedState(key);
     if (!state.loading && state.list.length === 0) {
-      fetchExpandedTrades(key);
+      fetchExpandedGroups(key);
     }
   }
 };
 
-const getExpandedTrades = (symbol) => {
+const getExpandedGroups = (symbol) => {
   const key = normalizeSymbol(symbol);
   const state = expandedBySymbol.value[key];
   return state?.list || [];
+};
+
+const getExpandedActiveKey = (symbol) => {
+  const key = normalizeSymbol(symbol);
+  const state = expandedBySymbol.value[key];
+  return state?.activeKey || [];
+};
+
+const setExpandedActiveKey = (symbol, keys) => {
+  const key = normalizeSymbol(symbol);
+  const state = ensureExpandedState(key);
+  state.activeKey = keys || [];
 };
 
 const isExpandedLoading = (symbol) => {
   const key = normalizeSymbol(symbol);
   const state = expandedBySymbol.value[key];
   return !!state?.loading;
-};
-
-const getExpandedPagination = (symbol) => {
-  const key = normalizeSymbol(symbol);
-  const state = ensureExpandedState(key);
-  if (!state.hasTotal) return false;
-  return {
-    current: state.current,
-    pageSize: state.pageSize,
-    total: state.total,
-    size: 'small',
-    showSizeChanger: true,
-    showTotal: t => `共 ${t} 条`
-  };
-};
-
-const handleExpandedTableChange = (symbol, paginationConfig) => {
-  const key = normalizeSymbol(symbol);
-  const state = ensureExpandedState(key);
-  const p = paginationConfig || {};
-  const nextPage = p.current || 1;
-  const nextSize = p.pageSize || state.pageSize;
-  const changed = nextPage !== state.current || nextSize !== state.pageSize;
-  state.current = nextPage;
-  state.pageSize = nextSize;
-  if (changed) fetchExpandedTrades(key);
 };
 
 const columns = [
@@ -402,7 +399,7 @@ watch(
 }
 
 .history-holdings-modal :deep(.ant-modal) {
-  max-height: 80vh;
+  height: 80vh;
   margin: 0 auto;
   padding-bottom: 0;
   display: flex;
@@ -425,5 +422,36 @@ watch(
 :deep(.ant-table-expanded-row-fixed) {
   padding: 0 16px 16px 50px !important;
   background: #fbfbfb;
+}
+
+.group-loading {
+  padding: 24px 0;
+  text-align: center;
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 14px;
+}
+
+.group-title {
+  font-weight: 500;
+}
+
+.group-header .profit {
+  color: #cf1322;
+  font-weight: 500;
+}
+
+.group-header .loss {
+  color: #3f8600;
+  font-weight: 500;
+}
+
+:deep(.ant-collapse-content-box) {
+  padding: 12px !important;
 }
 </style>

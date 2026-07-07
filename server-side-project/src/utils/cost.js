@@ -123,7 +123,124 @@ const calculateDilutedProfits = ({
   };
 };
 
+/**
+ * 按持仓归零事件对交易记录进行分仓分组。
+ *
+ * 算法说明：
+ *   - 按 date 升序、_id 升序遍历交易；
+ *   - 维护累计持仓数量 runningQty；
+ *   - 当持仓数量归零时，当前分仓闭合，计算该次清仓的实现盈亏；
+ *   - 每一笔新的买入（在 runningQty 为 0 后）开启新的分仓；
+ *   - 若出现超卖导致 runningQty < 0，则钳位到 0 并标记 hasAnomaly。
+ *
+ * @param {Object} params
+ * @param {Array} params.trades 单只股票的交易记录
+ * @param {Object} params.rates 汇率映射
+ * @returns {Array} 分仓分组数组
+ */
+const calculatePositionZeroGroups = ({ trades, rates }) => {
+  if (!Array.isArray(trades)) return [];
+
+  const groups = [];
+  let runningQty = 0;
+  let currentGroup = null;
+  let groupIndex = 0;
+
+  const sortedTrades = [...trades].sort((a, b) => {
+    const d = new Date(a.date) - new Date(b.date);
+    if (d !== 0) return d;
+    return String(a._id).localeCompare(String(b._id));
+  });
+
+  sortedTrades.forEach((t) => {
+    const type = String(t.type || '').toUpperCase();
+    const qty = Number(t.quantity) || 0;
+    const price = Number(t.price) || 0;
+    const commission = Number(t.commission) || 0;
+    const currency = t.currency || 'CNY';
+    const rate = rates[currency] || 1;
+
+    // 持仓归零后，下一笔交易开启新分仓
+    if (runningQty === 0 && !currentGroup) {
+      groupIndex += 1;
+      currentGroup = {
+        groupId: String(groupIndex),
+        startDate: t.date,
+        endDate: t.date,
+        currency,
+        totalBuyCost: 0,
+        totalSellProceed: 0,
+        trades: [],
+        hasAnomaly: false
+      };
+    }
+
+    if (!currentGroup) {
+      return;
+    }
+
+    currentGroup.trades.push(t);
+    currentGroup.endDate = t.date;
+    currentGroup.currency = currency;
+
+    if (type === 'BUY') {
+      currentGroup.totalBuyCost += price * qty + commission;
+      runningQty += qty;
+    } else if (type === 'SELL') {
+      currentGroup.totalSellProceed += price * qty - commission;
+      runningQty -= qty;
+    }
+
+    if (runningQty < 0) {
+      runningQty = 0;
+      currentGroup.hasAnomaly = true;
+    }
+
+    if (runningQty === 0 && currentGroup) {
+      const buyCNY = currentGroup.totalBuyCost * rate;
+      const sellCNY = currentGroup.totalSellProceed * rate;
+      const realizedProfit = round2(sellCNY - buyCNY);
+      const profitRate = buyCNY > 0 ? parseFloat((realizedProfit / buyCNY).toFixed(4)) : 0;
+
+      groups.push({
+        groupId: currentGroup.groupId,
+        startDate: currentGroup.startDate,
+        endDate: currentGroup.endDate,
+        currency: currentGroup.currency,
+        realizedProfit,
+        totalBuyCost: round2(buyCNY),
+        profitRate,
+        tradesCount: currentGroup.trades.length,
+        hasAnomaly: currentGroup.hasAnomaly,
+        trades: currentGroup.trades.map((trade) => ({
+          id: trade._id,
+          symbol: trade.symbol,
+          name: trade.name,
+          stockName: trade.name,
+          date: trade.date,
+          type: trade.type,
+          price: trade.price,
+          quantity: trade.quantity,
+          commission: trade.commission,
+          currency: trade.currency,
+          market: trade.market,
+          mood: trade.mood,
+          logic: trade.logic ?? null,
+          isSystemCompliant: trade.isSystemCompliant ?? null,
+          cognitiveBias: trade.cognitiveBias ?? null,
+          improvementMeasures: trade.improvementMeasures ?? null
+        }))
+      });
+
+      currentGroup = null;
+    }
+  });
+
+  return groups;
+};
+
 module.exports = {
   calculateDilutedPerformance,
-  calculateDilutedProfits
+  calculateDilutedProfits,
+  calculatePositionZeroGroups
 };

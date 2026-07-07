@@ -6,6 +6,7 @@
     :footer="null"
     width="780px"
     centered
+    wrapClassName="holding-detail-modal"
   >
     <div v-if="!holding" style="color: #999; padding: 12px 0;">未选择持仓</div>
 
@@ -343,5 +344,26 @@ const columns = [
   border-left: 4px solid #1890ff;
   padding-left: 8px;
   color: #1f1f1f;
+}
+
+.holding-detail-modal :deep(.ant-modal) {
+  height: 80vh;
+  margin: 0 auto;
+  padding-bottom: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.holding-detail-modal :deep(.ant-modal-content) {
+  flex: 1;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.holding-detail-modal :deep(.ant-modal-body) {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 </style>

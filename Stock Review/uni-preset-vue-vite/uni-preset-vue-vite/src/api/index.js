@@ -57,6 +57,22 @@ export const getHistoryHoldings = (params) => {
   });
 };
 
+export const getHistoryHoldingGroups = (symbol) => {
+  const encoded = encodeURIComponent(symbol);
+  return request({
+    url: `/api/trades/history-holdings/${encoded}/groups`,
+    method: 'GET'
+  });
+};
+
+export const batchGetHistoryHoldingGroups = (symbols) => {
+  return request({
+    url: '/api/trades/history-holdings/groups/batch',
+    method: 'POST',
+    data: { symbols }
+  });
+};
+
 export const addTrade = (data) => {
   return request({
     url: '/api/trades',

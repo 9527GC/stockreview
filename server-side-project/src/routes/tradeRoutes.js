@@ -6,6 +6,8 @@ const auth = require('../middleware/auth');
 router.get('/holdings', auth, tradeController.getHoldings);
 router.delete('/holdings/:symbol', auth, tradeController.deleteHolding);
 router.get('/history-holdings', auth, tradeController.getHistoryHoldings);
+router.get('/history-holdings/:symbol/groups', auth, tradeController.getHistoryHoldingGroups);
+router.post('/history-holdings/groups/batch', auth, tradeController.batchGetHistoryHoldingGroups);
 router.get('/reviews', auth, tradeController.getReviews);
 router.get('/reviews/:id', auth, tradeController.getReviewById);
 router.get('/commission-preference', auth, tradeController.getCommissionPreference);

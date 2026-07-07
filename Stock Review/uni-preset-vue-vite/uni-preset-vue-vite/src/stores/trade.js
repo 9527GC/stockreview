@@ -14,7 +14,9 @@ import {
   getMarketOverview,
   getRealTimeQuote,
   getCommissionPreference,
-  updateCommissionPreference
+  updateCommissionPreference,
+  getHistoryHoldingGroups,
+  batchGetHistoryHoldingGroups
 } from '@/api/index';
 import { normalizeSymbol, buildSymbolAliases } from '@/utils/stock';
 
@@ -24,6 +26,7 @@ export const useTradeStore = defineStore('trade', () => {
   const transferRecords = ref([]); // 转账记录
   const transferRecordsRequestFailed = ref(false);
   const holdingsList = ref([]); // 持仓列表
+  const historyHoldingGroupsBySymbol = ref({}); // 各股票历史清仓分组（按清仓周期分组）
   const assetsSummary = ref(null); // 资产概览
   const loading = ref(false);
   const refreshing = ref(false); // 交易变更后的后台刷新状态
@@ -138,6 +141,9 @@ export const useTradeStore = defineStore('trade', () => {
       }
     }
 
+    // 刷新当前持仓对应的历史清仓分组，用于跨周期累计收益计算
+    await loadHistoryHoldingGroupsByHoldings();
+
     saveTrades();
   };
 
@@ -236,7 +242,48 @@ export const useTradeStore = defineStore('trade', () => {
     return { text: market || 'A', color: '#f5222d' };
   };
 
-  // 获取复盘记录
+  // 加载指定股票的历史清仓分组，优先使用批量接口一次性拉取
+  const loadHistoryHoldingGroups = async (symbols) => {
+    const uniqueSymbols = Array.from(new Set((symbols || []).map(s => normalizeSymbol(s)).filter(Boolean)));
+    if (uniqueSymbols.length === 0) return;
+
+    const applyResults = (results) => {
+      const next = { ...historyHoldingGroupsBySymbol.value };
+      results.forEach(({ symbol, groups }) => {
+        const key = normalizeSymbol(symbol);
+        if (key) next[key] = Array.isArray(groups) ? groups : [];
+      });
+      historyHoldingGroupsBySymbol.value = next;
+    };
+
+    try {
+      const res = await batchGetHistoryHoldingGroups(uniqueSymbols);
+      const list = Array.isArray(res?.list) ? res.list : [];
+      applyResults(list);
+    } catch (err) {
+      // 批量接口失败时回退到单个接口，避免功能完全不可用
+      console.error('Failed to load history holding groups via batch API:', err);
+      const results = await Promise.all(
+        uniqueSymbols.map(async (symbol) => {
+          try {
+            const res = await getHistoryHoldingGroups(symbol);
+            const groups = Array.isArray(res?.list) ? res.list : [];
+            return { symbol, groups };
+          } catch (e) {
+            console.error(`Failed to load history holding groups for ${symbol}:`, e);
+            return { symbol, groups: [] };
+          }
+        })
+      );
+      applyResults(results);
+    }
+  };
+
+  // 基于当前持仓列表加载对应的历史清仓分组
+  const loadHistoryHoldingGroupsByHoldings = async () => {
+    const symbols = (holdingsList.value || []).map(h => h.symbol);
+    await loadHistoryHoldingGroups(symbols);
+  };
   const reviews = computed(() => {
     if (!trades.value || trades.value.length === 0) return [];
     
@@ -299,6 +346,9 @@ export const useTradeStore = defineStore('trade', () => {
 
       const storedPrincipal = uni.getStorageSync('stock_review_principal');
       if (storedPrincipal) totalPrincipal.value = Number(storedPrincipal);
+
+      // 加载当前持仓对应的历史清仓分组，用于跨周期累计收益计算
+      await loadHistoryHoldingGroupsByHoldings();
 
     } catch (e) {
       console.error('Failed to load trades from API', e);
@@ -417,11 +467,19 @@ export const useTradeStore = defineStore('trade', () => {
     }
   };
 
+  // 计算指定股票跨清仓周期的累计已实现收益
+  const calculateHistoricalRealizedProfit = (symbol) => {
+    const normalized = normalizeSymbol(symbol);
+    const groups = historyHoldingGroupsBySymbol.value[normalized] || [];
+    return groups.reduce((sum, g) => sum + Number(g.realizedProfit || 0), 0);
+  };
+
   // Get Holdings (Calculated from trades or from API)
   const holdings = computed(() => {
     // If we have API data, use it
     if (holdingsList.value && holdingsList.value.length > 0) {
       return holdingsList.value.map(h => {
+        const normalizedSymbol = normalizeSymbol(h.symbol);
         const marketInfo = getMarketTag(h.symbol, h.marketTag || h.market);
         const rate = exchangeRates[h.currency || 'CNY'] || 1;
 
@@ -442,7 +500,7 @@ export const useTradeStore = defineStore('trade', () => {
         const lastTradeDateTimestamp = h.lastTradeDate
           ? dayjs(h.lastTradeDate).valueOf()
           : (trades.value || [])
-              .filter(t => normalizeSymbol(t.symbol) === normalizeSymbol(h.symbol))
+              .filter(t => normalizeSymbol(t.symbol) === normalizedSymbol)
               .reduce((max, t) => {
                 const ts = t.timestamp || (t.date ? dayjs(t.date).valueOf() : 0);
                 return ts > max ? ts : max;
@@ -455,11 +513,20 @@ export const useTradeStore = defineStore('trade', () => {
                 ? marketValue - totalCost
                 : null
             );
-        
+
+        // 跨清仓周期累计收益 = 历史各清仓周期已实现收益 + 当前持仓盈亏
+        const historicalRealizedProfit = calculateHistoricalRealizedProfit(normalizedSymbol);
+        const cumulativeProfit = (unrealizedProfit !== null ? unrealizedProfit : 0) + historicalRealizedProfit;
+
         // Handle profitRate format (API might return 5 for 5%, we want 0.05)
         let profitRate = h.profitRate !== null && h.profitRate !== undefined ? Number(h.profitRate) : null;
         if (profitRate !== null && (profitRate > 1 || profitRate < -1)) {
           profitRate = profitRate / 100;
+        }
+
+        // 当累计收益按跨周期重新计算后，盈亏率也按同一口径重新计算以保证一致
+        if (totalCost !== null && totalCost > 0) {
+          profitRate = cumulativeProfit / totalCost;
         }
 
         // Calculate dailyProfitRate if missing
@@ -483,7 +550,7 @@ export const useTradeStore = defineStore('trade', () => {
           profitRate: profitRate !== null ? profitRate : null,
           dailyProfitRate,
           realizedProfit: h.realizedProfit !== null && h.realizedProfit !== undefined ? Number(h.realizedProfit) : null,
-          cumulativeProfit: h.cumulativeProfit !== null && h.cumulativeProfit !== undefined ? Number(h.cumulativeProfit) : null,
+          cumulativeProfit,
           positionRatio: h.positionRatio,
           positionPercent: h.positionPercent,
           marketTag: marketInfo?.text,
@@ -494,10 +561,10 @@ export const useTradeStore = defineStore('trade', () => {
     }
 
     const map = {};
-    
+
     trades.value.forEach(trade => {
       if (!trade.symbol) return;
-      
+
       if (!map[trade.symbol]) {
         map[trade.symbol] = {
           symbol: trade.symbol,
@@ -508,12 +575,12 @@ export const useTradeStore = defineStore('trade', () => {
           market: trade.market
         };
       }
-      
+
       const item = map[trade.symbol];
       const qty = Number(trade.quantity);
       const price = Number(trade.price);
       const fee = Number(trade.commission || 0);
-      
+
       if (item.cumulativeProfit == null) item.cumulativeProfit = 0;
 
       if (trade.type === 'BUY') {
@@ -525,32 +592,38 @@ export const useTradeStore = defineStore('trade', () => {
         // 计算本次卖出的对应成本（移动平均法）
         const costPerShare = item.totalCost / item.quantity;
         const soldCost = qty * costPerShare;
-        
+
         // 卖出实现的盈亏累加到累计盈亏
         item.cumulativeProfit += (revenue - soldCost);
-        
+
         item.quantity -= qty;
         item.totalCost -= soldCost;
-        
+
         if (item.quantity <= 0) {
           item.totalCost = 0;
         }
       }
-      
+
       // Update last known price
       item.currentPrice = price;
     });
 
     return Object.values(map).filter(h => h.quantity > 0).map(h => {
+      const normalizedSymbol = normalizeSymbol(h.symbol);
       const unrealizedProfit = (h.quantity * h.currentPrice) - h.totalCost;
-      const cumulativeProfit = (h.cumulativeProfit || 0) + unrealizedProfit;
-      
+      // 跨清仓周期累计收益：优先使用历史分组计算，无分组时回退到 trades 累计
+      const historicalGroups = historyHoldingGroupsBySymbol.value[normalizedSymbol] || [];
+      const historicalRealizedProfit = historicalGroups.reduce((sum, g) => sum + Number(g.realizedProfit || 0), 0);
+      const cumulativeProfit = historicalGroups.length > 0
+        ? historicalRealizedProfit + unrealizedProfit
+        : (h.cumulativeProfit || 0) + unrealizedProfit;
+
       let dailyProfit = h.dailyProfit || 0;
       let dailyProfitRate = h.dailyProfitRate || 0;
 
       // 计算板块/市场标签逻辑
       const marketInfo = getMarketTag(h.symbol, h.market);
-      
+
       return {
         ...h,
         avgCost: h.quantity > 0 ? h.totalCost / h.quantity : 0,
