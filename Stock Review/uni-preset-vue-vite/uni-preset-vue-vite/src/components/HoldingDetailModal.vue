@@ -7,119 +7,124 @@
     width="780px"
     centered
     wrapClassName="holding-detail-modal"
+    :style="{ maxHeight: '80vh', display: 'flex', flexDirection: 'column', paddingBottom: 0 }"
   >
     <div v-if="!holding" style="color: #999; padding: 12px 0;">未选择持仓</div>
 
     <template v-else>
-      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
-        <div>
-          <div style="font-weight: 600; color: #1f1f1f; line-height: 1.4;">{{ holding.name || holding.symbol }}</div>
-          <div style="font-size: 12px; color: #999; line-height: 1.2;">{{ holding.symbol }}</div>
+      <div class="body-content">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+          <div>
+            <div style="font-weight: 600; color: #1f1f1f; line-height: 1.4;">{{ holding.name || holding.symbol }}</div>
+            <div style="font-size: 12px; color: #999; line-height: 1.2;">{{ holding.symbol }}</div>
+          </div>
+          <div style="text-align: right;">
+            <div style="font-size: 12px; color: #999;">现价</div>
+            <div style="font-weight: 600; color: #1f1f1f;">{{ holding.currentPrice !== null && holding.currentPrice !== undefined ? (currencySymbol + Number(holding.currentPrice).toFixed(2)) : '--' }}</div>
+          </div>
         </div>
-        <div style="text-align: right;">
-          <div style="font-size: 12px; color: #999;">现价</div>
-          <div style="font-weight: 600; color: #1f1f1f;">{{ holding.currentPrice !== null && holding.currentPrice !== undefined ? (currencySymbol + Number(holding.currentPrice).toFixed(2)) : '--' }}</div>
-        </div>
-      </div>
 
-      <div class="metrics-panel">
-        <div class="metric-item">
-          <span class="metric-label">今日盈亏</span>
-          <span
-            v-if="holding.dailyProfit !== null && holding.dailyProfit !== undefined"
-            class="metric-value"
-            :class="holding.dailyProfit >= 0 ? 'positive' : 'negative'"
-          >
-            {{ holding.dailyProfit >= 0 ? '+' : '' }}{{ currencySymbol }}{{ Number(holding.dailyProfit).toFixed(2) }}
-          </span>
-          <span v-else class="metric-value">--</span>
-        </div>
-        <div class="metric-item">
-          <span class="metric-label">持仓盈亏</span>
-          <span
-            v-if="holding.unrealizedProfit !== null && holding.unrealizedProfit !== undefined"
-            class="metric-value"
-            :class="holding.unrealizedProfit >= 0 ? 'positive' : 'negative'"
-          >
-            {{ holding.unrealizedProfit >= 0 ? '+' : '' }}{{ currencySymbol }}{{ Number(holding.unrealizedProfit).toFixed(2) }}
-          </span>
-          <span v-else class="metric-value">--</span>
-        </div>
-        <div class="metric-item">
-          <span class="metric-label">累计盈亏</span>
-          <span
-            v-if="holding.cumulativeProfit !== null && holding.cumulativeProfit !== undefined"
-            class="metric-value"
-            :class="holding.cumulativeProfit >= 0 ? 'positive' : 'negative'"
-          >
-            {{ holding.cumulativeProfit >= 0 ? '+' : '' }}{{ currencySymbol }}{{ Number(holding.cumulativeProfit).toFixed(2) }}
-          </span>
-          <span v-else class="metric-value">--</span>
-        </div>
-        <div class="metric-item">
-          <span class="metric-label">持仓数量</span>
-          <span class="metric-value">{{ holding.quantity !== null && holding.quantity !== undefined ? Number(holding.quantity) : '--' }}</span>
-        </div>
-        <div class="metric-item">
-          <span class="metric-label">持仓成本</span>
-          <span class="metric-value">{{ holding.avgCost !== null && holding.avgCost !== undefined ? (currencySymbol + Number(holding.avgCost).toFixed(2)) : '--' }}</span>
-        </div>
-        <div class="metric-item">
-          <span class="metric-label">成本金额</span>
-          <span class="metric-value">{{ totalCost !== null ? (currencySymbol + totalCost.toFixed(2)) : '--' }}</span>
-        </div>
-      </div>
-
-      <div class="section-title" style="margin-top: 16px; display: flex; justify-content: space-between; align-items: center;">
-        <span>操作记录</span>
-        <a-button type="primary" size="small" @click="handleAddTrade">添加交易</a-button>
-      </div>
-      <a-table
-        :columns="columns"
-        :data-source="operations"
-        :loading="loading"
-        :pagination="pagination"
-        @change="handleTableChange"
-        size="middle"
-        :row-key="r => r.id"
-      >
-        <template #bodyCell="{ column, record }">
-          <template v-if="column.key === 'type'">
-            <a-tag :color="record.type === 'BUY' ? 'red' : 'green'">
-              {{ record.type === 'BUY' ? '买入' : '卖出' }}
-            </a-tag>
-          </template>
-          <template v-if="column.key === 'price'">
-            {{ currencySymbol }}{{ Number(record.price || 0).toFixed(2) }}
-          </template>
-          <template v-if="column.key === 'date'">
-            {{ dayjs(record.date).format('YYYY-MM-DD HH:mm') }}
-          </template>
-          <template v-if="column.key === 'action'">
-            <a-button type="link" size="small" @click="handleEdit(record)">编辑</a-button>
-            <a-popconfirm
-              title="确定要删除这条交易记录吗？"
-              @confirm="handleDelete(record)"
+        <div class="metrics-panel">
+          <div class="metric-item">
+            <span class="metric-label">今日盈亏</span>
+            <span
+              v-if="holding.dailyProfit !== null && holding.dailyProfit !== undefined"
+              class="metric-value"
+              :class="holding.dailyProfit >= 0 ? 'positive' : 'negative'"
             >
-              <a-button type="link" danger size="small">删除</a-button>
-            </a-popconfirm>
-          </template>
-        </template>
-      </a-table>
+              {{ holding.dailyProfit >= 0 ? '+' : '' }}{{ currencySymbol }}{{ Number(holding.dailyProfit).toFixed(2) }}
+            </span>
+            <span v-else class="metric-value">--</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">持仓盈亏</span>
+            <span
+              v-if="holding.unrealizedProfit !== null && holding.unrealizedProfit !== undefined"
+              class="metric-value"
+              :class="holding.unrealizedProfit >= 0 ? 'positive' : 'negative'"
+            >
+              {{ holding.unrealizedProfit >= 0 ? '+' : '' }}{{ currencySymbol }}{{ Number(holding.unrealizedProfit).toFixed(2) }}
+            </span>
+            <span v-else class="metric-value">--</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">累计盈亏</span>
+            <span
+              v-if="holding.cumulativeProfit !== null && holding.cumulativeProfit !== undefined"
+              class="metric-value"
+              :class="holding.cumulativeProfit >= 0 ? 'positive' : 'negative'"
+            >
+              {{ holding.cumulativeProfit >= 0 ? '+' : '' }}{{ currencySymbol }}{{ Number(holding.cumulativeProfit).toFixed(2) }}
+            </span>
+            <span v-else class="metric-value">--</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">持仓数量</span>
+            <span class="metric-value">{{ holding.quantity !== null && holding.quantity !== undefined ? Number(holding.quantity) : '--' }}</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">持仓成本</span>
+            <span class="metric-value">{{ holding.avgCost !== null && holding.avgCost !== undefined ? (currencySymbol + Number(holding.avgCost).toFixed(2)) : '--' }}</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">成本金额</span>
+            <span class="metric-value">{{ totalCost !== null ? (currencySymbol + totalCost.toFixed(2)) : '--' }}</span>
+          </div>
+        </div>
 
-      <TradeModal
-        v-model:open="editModalOpen"
-        mode="edit"
-        :trade="editingTrade"
-        @success="onEditSuccess"
-      />
+        <div class="section-title" style="margin-top: 16px; display: flex; justify-content: space-between; align-items: center;">
+          <span>操作记录</span>
+          <a-button type="primary" size="small" @click="handleAddTrade">添加交易</a-button>
+        </div>
+        <div class="table-wrapper">
+          <a-table
+            :columns="columns"
+            :data-source="operations"
+            :loading="loading"
+            :pagination="pagination"
+            @change="handleTableChange"
+            size="middle"
+            :row-key="r => r.id"
+          >
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'type'">
+                <a-tag :color="record.type === 'BUY' ? 'red' : 'green'">
+                  {{ record.type === 'BUY' ? '买入' : '卖出' }}
+                </a-tag>
+              </template>
+              <template v-if="column.key === 'price'">
+                {{ currencySymbol }}{{ Number(record.price || 0).toFixed(2) }}
+              </template>
+              <template v-if="column.key === 'date'">
+                {{ dayjs(record.date).format('YYYY-MM-DD HH:mm') }}
+              </template>
+              <template v-if="column.key === 'action'">
+                <a-button type="link" size="small" @click="handleEdit(record)">编辑</a-button>
+                <a-popconfirm
+                  title="确定要删除这条交易记录吗？"
+                  @confirm="handleDelete(record)"
+                >
+                  <a-button type="link" danger size="small">删除</a-button>
+                </a-popconfirm>
+              </template>
+            </template>
+          </a-table>
+        </div>
 
-      <TradeModal
-        v-model:open="addModalOpen"
-        mode="add"
-        :initial-data="initialTradeData"
-        @success="onAddSuccess"
-      />
+        <TradeModal
+          v-model:open="editModalOpen"
+          mode="edit"
+          :trade="editingTrade"
+          @success="onEditSuccess"
+        />
+
+        <TradeModal
+          v-model:open="addModalOpen"
+          mode="add"
+          :initial-data="initialTradeData"
+          @success="onAddSuccess"
+        />
+      </div>
     </template>
   </a-modal>
 </template>
@@ -344,26 +349,41 @@ const columns = [
   border-left: 4px solid #1890ff;
   padding-left: 8px;
   color: #1f1f1f;
+  flex-shrink: 0;
 }
 
-.holding-detail-modal :deep(.ant-modal) {
-  height: 80vh;
-  margin: 0 auto;
-  padding-bottom: 0;
+.body-content {
   display: flex;
   flex-direction: column;
+  height: 100%;
+  min-height: 0;
 }
 
-.holding-detail-modal :deep(.ant-modal-content) {
+.table-wrapper {
   flex: 1;
-  max-height: 100%;
+  overflow: auto;
+  min-height: 0;
+}
+</style>
+
+<style>
+/* 弹框最大高度 80vh，wrap 使用 flex 居中，内容区 flex 布局让表格滚动 */
+.holding-detail-modal {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+}
+
+.holding-detail-modal .ant-modal-content {
+  flex: 1;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
-.holding-detail-modal :deep(.ant-modal-body) {
+.holding-detail-modal .ant-modal-body {
   flex: 1;
-  overflow-y: auto;
+  overflow: hidden;
   min-height: 0;
 }
 </style>
