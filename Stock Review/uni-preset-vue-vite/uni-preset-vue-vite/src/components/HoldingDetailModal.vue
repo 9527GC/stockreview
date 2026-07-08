@@ -7,7 +7,7 @@
     width="780px"
     centered
     wrapClassName="holding-detail-modal"
-    :style="{ maxHeight: '80vh', display: 'flex', flexDirection: 'column', paddingBottom: 0 }"
+    :style="{ paddingBottom: 0 }"
   >
     <div v-if="!holding" style="color: #999; padding: 12px 0;">未选择持仓</div>
 
@@ -85,6 +85,7 @@
             @change="handleTableChange"
             size="middle"
             :row-key="r => r.id"
+            :scroll="{ y: tableScrollY }"
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'type'">
@@ -156,6 +157,7 @@ const currentPage = ref(1);
 const pageSize = ref(20);
 const total = ref(0);
 const hasTotal = ref(false);
+const tableScrollY = computed(() => (hasTotal.value ? 'calc(80vh - 360px)' : 'calc(80vh - 310px)'));
 
 const parseListResponse = (res) => {
   if (!res) return { list: [], total: undefined };
@@ -308,6 +310,7 @@ const columns = [
   border-radius: 8px;
   overflow: hidden;
   margin-bottom: 16px;
+  flex-shrink: 0;
 }
 
 .metric-item {
@@ -355,35 +358,55 @@ const columns = [
 .body-content {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
   min-height: 0;
+  max-height: calc(80vh - 55px);
+  padding: 24px;
+  box-sizing: border-box;
 }
 
 .table-wrapper {
   flex: 1;
-  overflow: auto;
-  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 180px;
 }
 </style>
 
 <style>
-/* 弹框最大高度 80vh，wrap 使用 flex 居中，内容区 flex 布局让表格滚动 */
-.holding-detail-modal {
-  display: flex !important;
-  align-items: center;
-  justify-content: center;
+/* 弹框内容区 flex 布局，让表格滚动条在弹框内部 */
+.holding-detail-modal .ant-modal {
+  max-height: 80vh !important;
+  margin: 0 auto;
+  padding-bottom: 0;
 }
 
 .holding-detail-modal .ant-modal-content {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  max-height: 80vh !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
 }
 
 .holding-detail-modal .ant-modal-body {
-  flex: 1;
-  overflow: hidden;
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+}
+
+.holding-detail-modal .ant-table-wrapper,
+.holding-detail-modal .ant-spin-nested-loading,
+.holding-detail-modal .ant-spin-container,
+.holding-detail-modal .ant-table,
+.holding-detail-modal .ant-table-container {
   min-height: 0;
+}
+
+.holding-detail-modal .ant-table-body {
+  overflow-y: auto !important;
 }
 </style>
