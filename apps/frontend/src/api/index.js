@@ -49,6 +49,14 @@ export const getTradeReviews = (params) => {
   });
 };
 
+export const getCurrentHoldingTrades = (symbol) => {
+  const encoded = encodeURIComponent(symbol);
+  return request({
+    url: `/api/trades/holdings/${encoded}/trades`,
+    method: 'GET'
+  });
+};
+
 export const getHistoryHoldings = (params) => {
   return request({
     url: '/api/trades/history-holdings',

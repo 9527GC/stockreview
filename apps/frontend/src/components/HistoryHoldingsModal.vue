@@ -31,6 +31,7 @@
         <a-empty v-else-if="getExpandedGroups(record.symbol).length === 0" description="暂无交易记录" />
         <a-collapse
           v-else
+          class="group-collapse"
           :activeKey="getExpandedActiveKey(record.symbol)"
           @change="(keys) => setExpandedActiveKey(record.symbol, keys)"
           size="small"
@@ -54,6 +55,7 @@
               </div>
             </template>
             <a-table
+              class="group-trades-table"
               :columns="innerColumns"
               :data-source="group.trades"
               :row-key="t => t.id"
@@ -370,7 +372,7 @@ const innerColumns = [
   { title: '金额', key: 'amount', align: 'right' },
   { title: '手续费', dataIndex: 'commission', key: 'commission', align: 'right' },
   { title: '交易逻辑', dataIndex: 'logic', key: 'logic', ellipsis: true },
-  { title: '操作', key: 'action', width: 120, align: 'center', fixed: 'right' }
+  { title: '操作', key: 'action', width: 120, align: 'center' }
 ];
 
 watch(
@@ -391,14 +393,14 @@ watch(
 );
 </script>
 
-<style scoped>
+<style>
 .expand-column-title {
   display: inline-block;
   padding-left: 8px;
   white-space: nowrap;
 }
 
-.history-holdings-modal :deep(.ant-modal) {
+.history-holdings-modal .ant-modal {
   height: 80vh;
   margin: 0 auto;
   padding-bottom: 0;
@@ -406,22 +408,70 @@ watch(
   flex-direction: column;
 }
 
-.history-holdings-modal :deep(.ant-modal-content) {
+.history-holdings-modal .ant-modal-content {
   flex: 1;
   max-height: 100%;
   display: flex;
   flex-direction: column;
 }
 
-.history-holdings-modal :deep(.ant-modal-body) {
+.history-holdings-modal .ant-modal-body {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
 }
 
-:deep(.ant-table-expanded-row-fixed) {
-  padding: 0 16px 16px 50px !important;
-  background: #fbfbfb;
+.history-holdings-modal .ant-table-expanded-row-fixed,
+.history-holdings-modal .ant-table-expanded-row {
+  padding: 0 0 16px 0 !important;
+  background: #fbfbfb !important;
+}
+
+.history-holdings-modal .ant-table-expanded-row-fixed > td,
+.history-holdings-modal .ant-table-expanded-row > td {
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+.history-holdings-modal .group-collapse {
+  width: 100% !important;
+}
+
+.history-holdings-modal .group-collapse .ant-collapse-header {
+  padding: 12px 24px !important;
+}
+
+.history-holdings-modal .group-collapse .ant-collapse-content-box {
+  padding: 12px 0 !important;
+}
+
+.history-holdings-modal .group-collapse .ant-collapse-header-text,
+.history-holdings-modal .group-collapse .ant-collapse-expand-icon {
+  margin-left: 0 !important;
+  padding-left: 0 !important;
+}
+
+.history-holdings-modal .group-trades-table,
+.history-holdings-modal .group-trades-table .ant-table,
+.history-holdings-modal .group-trades-table .ant-table-container,
+.history-holdings-modal .group-trades-table .ant-table-content,
+.history-holdings-modal .group-trades-table table {
+  width: 100% !important;
+}
+
+.history-holdings-modal .group-trades-table .ant-table {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+.history-holdings-modal .group-trades-table .ant-table-cell {
+  padding-left: 8px !important;
+  padding-right: 8px !important;
+}
+
+.history-holdings-modal .group-trades-table .ant-table-thead > tr > th:first-child,
+.history-holdings-modal .group-trades-table .ant-table-tbody > tr > td:first-child {
+  padding-left: 24px !important;
 }
 
 .group-loading {
@@ -449,9 +499,5 @@ watch(
 .group-header .loss {
   color: #3f8600;
   font-weight: 500;
-}
-
-:deep(.ant-collapse-content-box) {
-  padding: 12px !important;
 }
 </style>

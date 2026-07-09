@@ -5,6 +5,7 @@ const auth = require('../middleware/auth');
 
 router.get('/holdings', auth, tradeController.getHoldings);
 router.delete('/holdings/:symbol', auth, tradeController.deleteHolding);
+router.get('/holdings/:symbol/trades', auth, tradeController.getCurrentHoldingTrades);
 router.get('/history-holdings', auth, tradeController.getHistoryHoldings);
 router.get('/history-holdings/:symbol/groups', auth, tradeController.getHistoryHoldingGroups);
 router.post('/history-holdings/groups/batch', auth, tradeController.batchGetHistoryHoldingGroups);

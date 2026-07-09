@@ -134,7 +134,7 @@
 import { computed, ref, watch } from 'vue';
 import dayjs from 'dayjs';
 import { message } from 'ant-design-vue';
-import { getTradeReviews } from '@/api/index';
+import { getCurrentHoldingTrades } from '@/api/index';
 import { normalizeSymbol } from '@/utils/stock';
 import { useTradeStore } from '@/stores/trade';
 import TradeModal from './TradeModal.vue';
@@ -169,15 +169,13 @@ const parseListResponse = (res) => {
 
 const fetchOperations = async () => {
   const symbol = normalizeSymbol(props.holding?.symbol);
+  console.log('[fetchOperations] holding symbol:', props.holding?.symbol, 'normalized:', symbol, 'open:', props.open);
   if (!props.open || !symbol) return;
 
   loading.value = true;
   try {
-    const res = await getTradeReviews({
-      symbol,
-      page: currentPage.value,
-      pageSize: pageSize.value
-    });
+    const res = await getCurrentHoldingTrades(symbol);
+    console.log('[fetchOperations] response:', res);
     const parsed = parseListResponse(res);
     operations.value = parsed.list || [];
     if (typeof parsed.total === 'number') {
@@ -187,6 +185,9 @@ const fetchOperations = async () => {
       total.value = 0;
       hasTotal.value = false;
     }
+  } catch (err) {
+    console.error('[fetchOperations] failed:', err);
+    message.error('操作记录加载失败');
   } finally {
     loading.value = false;
   }
@@ -262,9 +263,23 @@ const handleEdit = (record) => {
   editModalOpen.value = true;
 };
 
+const checkIfCleared = async () => {
+  await store.loadTrades();
+  const normalized = normalizeSymbol(props.holding?.symbol);
+  const stillHolding = store.holdings.some(h => normalizeSymbol(h.symbol) === normalized);
+  if (!stillHolding) {
+    message.success('交易成功，已清仓个股');
+    emit('update:open', false);
+    emit('changed', props.holding?.symbol);
+    return true;
+  }
+  return false;
+};
+
 const onEditSuccess = async () => {
   editModalOpen.value = false;
   editingTrade.value = null;
+  if (await checkIfCleared()) return;
   message.success('交易记录已更新');
   await fetchOperations();
   emit('changed', props.holding?.symbol);
@@ -276,6 +291,7 @@ const handleAddTrade = () => {
 
 const onAddSuccess = async () => {
   addModalOpen.value = false;
+  if (await checkIfCleared()) return;
   message.success('交易记录已添加');
   await fetchOperations();
   emit('changed', props.holding?.symbol);
@@ -284,6 +300,7 @@ const onAddSuccess = async () => {
 const handleDelete = async (record) => {
   try {
     await store.deleteTrade(record.id);
+    if (await checkIfCleared()) return;
     message.success('交易记录已删除');
     await fetchOperations();
     emit('changed', record.symbol);

@@ -40,6 +40,7 @@ const buildSymbolAliases = (symbol) => {
       set.add(`${market}${code}`);
       set.add(`${market.toLowerCase()}${code}`);
       set.add(`${code}.${market.toLowerCase()}`);
+      set.add(code); // 兼容纯数字代码入库的情况（如 600519）
     } else if (market === 'US') {
       set.add(code);
       set.add(code.toLowerCase());

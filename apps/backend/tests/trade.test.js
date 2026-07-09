@@ -329,6 +329,130 @@ describe('GET /api/trades/history-holdings/:symbol/groups', () => {
   });
 });
 
+describe('GET /api/trades/holdings/:symbol/trades', () => {
+  test('已清仓股票应返回空列表', async () => {
+    await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '600519.SH',
+        type: 'BUY',
+        price: 10,
+        quantity: 100,
+        commission: 0,
+        date: '2026-06-01T09:30:00+08:00',
+        name: '贵州茅台'
+      });
+
+    await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '600519.SH',
+        type: 'SELL',
+        price: 12,
+        quantity: 100,
+        commission: 0,
+        date: '2026-06-02T14:30:00+08:00',
+        name: '贵州茅台'
+      });
+
+    const res = await request(app)
+      .get('/api/trades/holdings/600519.SH/trades')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.list).toEqual([]);
+    expect(res.body.total).toBe(0);
+  });
+
+  test('当前持仓应返回当前批次交易', async () => {
+    await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '600519.SH',
+        type: 'BUY',
+        price: 10,
+        quantity: 100,
+        commission: 0,
+        date: '2026-06-01T09:30:00+08:00',
+        name: '贵州茅台'
+      });
+
+    const res = await request(app)
+      .get('/api/trades/holdings/600519.SH/trades')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.list).toHaveLength(1);
+    expect(res.body.list[0].type).toBe('BUY');
+    expect(res.body.list[0].quantity).toBe(100);
+  });
+
+  test('历史清仓后重新买入，只返回新批次交易', async () => {
+    const trades = [
+      { symbol: '600519.SH', type: 'BUY', price: 10, quantity: 100, date: '2026-06-01T09:30:00+08:00', name: '贵州茅台' },
+      { symbol: '600519.SH', type: 'SELL', price: 12, quantity: 100, date: '2026-06-02T14:30:00+08:00', name: '贵州茅台' },
+      { symbol: '600519.SH', type: 'BUY', price: 15, quantity: 200, date: '2026-06-03T09:30:00+08:00', name: '贵州茅台' }
+    ];
+
+    for (const t of trades) {
+      await request(app)
+        .post('/api/trades')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ ...t, commission: 0 });
+    }
+
+    const res = await request(app)
+      .get('/api/trades/holdings/600519.SH/trades')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.list).toHaveLength(1);
+    expect(res.body.list[0].type).toBe('BUY');
+    expect(res.body.list[0].price).toBe(15);
+    expect(res.body.list[0].quantity).toBe(200);
+  });
+
+  test('部分卖出未清仓，应返回买入和部分卖出记录', async () => {
+    await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '600519.SH',
+        type: 'BUY',
+        price: 10,
+        quantity: 100,
+        commission: 0,
+        date: '2026-06-01T09:30:00+08:00',
+        name: '贵州茅台'
+      });
+
+    await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '600519.SH',
+        type: 'SELL',
+        price: 12,
+        quantity: 30,
+        commission: 0,
+        date: '2026-06-02T14:30:00+08:00',
+        name: '贵州茅台'
+      });
+
+    const res = await request(app)
+      .get('/api/trades/holdings/600519.SH/trades')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.list).toHaveLength(2);
+    expect(res.body.list[0].type).toBe('BUY');
+    expect(res.body.list[1].type).toBe('SELL');
+  });
+});
+
 describe('POST /api/trades/history-holdings/groups/batch', () => {
   test('应一次性返回多只股票的历史清仓分组', async () => {
     // 600519.SH 一次完整清仓

@@ -405,7 +405,7 @@ exports.getHoldings = async (req, res) => {
     const list = items.map(it => {
       let positionRatio = 0;
       let positionPercent = 0;
-      
+
       if (it.marketValueCNY !== null && totalAssetsCNY > 0) {
         positionRatio = it.marketValueCNY / totalAssetsCNY;
         positionPercent = parseFloat((positionRatio * 100).toFixed(2));
@@ -419,6 +419,106 @@ exports.getHoldings = async (req, res) => {
     });
 
     res.json({ list });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/**
+ * 获取当前持仓批次的交易记录（从最近一次持仓归零之后到当前的交易）。
+ * 若当前无持仓，返回空数组。
+ */
+exports.getCurrentHoldingTrades = async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const userId = req.user._id;
+
+    if (!symbol) {
+      return res.status(400).json({ message: 'Symbol is required' });
+    }
+
+    const normalizedSymbol = normalizeSymbol(symbol);
+    const aliases = buildSymbolAliases(normalizedSymbol);
+    const symbolSet = Array.from(new Set([normalizedSymbol, ...aliases]));
+
+    console.log('[getCurrentHoldingTrades]', {
+      symbol,
+      normalizedSymbol,
+      symbolSet,
+      userId: String(userId)
+    });
+
+    const [rates, trades] = await Promise.all([
+      getRates(),
+      Trade.find({ userId, symbol: { $in: symbolSet } }).sort({ date: 1, _id: 1 }).lean()
+    ]);
+
+    console.log('[getCurrentHoldingTrades] matched trades count:', trades.length);
+
+    let runningQty = 0;
+    let currentBatchStartIndex = -1;
+
+    const sortedTrades = [...trades].sort((a, b) => {
+      const d = new Date(a.date) - new Date(b.date);
+      if (d !== 0) return d;
+      return String(a._id).localeCompare(String(b._id));
+    });
+
+    for (let i = 0; i < sortedTrades.length; i++) {
+      const t = sortedTrades[i];
+      const qty = Number(t.quantity) || 0;
+
+      if (t.type === 'BUY') {
+        runningQty += qty;
+      } else if (t.type === 'SELL') {
+        runningQty -= qty;
+      }
+
+      if (runningQty < 0) {
+        runningQty = 0;
+      }
+
+      if (runningQty === 0) {
+        currentBatchStartIndex = -1;
+      } else if (currentBatchStartIndex === -1) {
+        currentBatchStartIndex = i;
+      }
+    }
+
+    const currentBatchTrades = currentBatchStartIndex === -1 ? [] : sortedTrades.slice(currentBatchStartIndex);
+
+    console.log('[getCurrentHoldingTrades] current batch count:', currentBatchTrades.length, 'runningQty:', runningQty);
+
+    const list = currentBatchTrades.map(t => {
+      const snapshotView = getTradeSnapshotView(t);
+      return {
+        id: t._id,
+        symbol: t.symbol,
+        name: t.name,
+        stockName: t.name,
+        date: t.date,
+        type: t.type,
+        price: t.price,
+        quantity: t.quantity,
+        commission: t.commission,
+        currency: t.currency,
+        market: marketFromTrade(t),
+        exchange: t.market,
+        mood: t.mood,
+        logic: t.logic ?? null,
+        isSystemCompliant: t.isSystemCompliant ?? null,
+        cognitiveBias: t.cognitiveBias ?? null,
+        improvementMeasures: t.improvementMeasures ?? null,
+        marketOverview: snapshotView.marketOverview,
+        marketOverviewSnapshot: snapshotView.marketOverviewSnapshot,
+        snapshotStatus: snapshotView.snapshotStatus,
+        snapshotSource: snapshotView.snapshotSource,
+        snapshotTime: snapshotView.snapshotTime,
+        news: t.news ?? null
+      };
+    });
+
+    res.json({ list, total: list.length });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
