@@ -52,6 +52,9 @@
 
    不要直接运行 `npm start` 或 `npm run dev`，否则会以 development 模式启动。
 
+   **启动优化说明**：`entrypoint.sh prod` 首次启动时会执行 `npm ci --only=production` 安装依赖；
+   如果 `node_modules` 已存在且 `package.json` 没有更新，后续启动会跳过安装，显著缩短 Pod 启动时间。
+
 ## 同步到 Sealos Devbox 的完整步骤
 
 1. 验证 Devbox 是否运行：
