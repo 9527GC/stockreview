@@ -1,7 +1,7 @@
 {
-  "name": "project",
+  "name": "stock-review-backend",
   "version": "1.0.0",
-  "description": "This is a simple Node.js server application example that demonstrates basic HTTP server functionality.",
+  "description": "Stock Review 后端服务（Node.js + Express + MongoDB）",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",

@@ -1,68 +1,71 @@
-# 工作指导
+# Stock Review
 
-## 核心铁律
+股票交易复盘系统 —— 记录持仓、交易、资产变动，支持收益曲线、复盘标签与大盘快照。
 
-**未经方案评审通过，严禁修改任何代码！**
+## 项目结构
 
-## 工作流程
+```text
+Stock Review/
+├── apps/
+│   ├── frontend/          # 前端：uni-app + Vue3 + Vite（H5/小程序）
+│   └── backend/           # 后端：Node.js + Express + MongoDB
+├── docs/                  # 项目文档
+├── WORKFLOW.md            # 开发工作指导与流程规范
+├── CLAUDE.md              # 项目级 Claude 工作偏好
+└── .github/workflows/     # CI 工作流
+```
 
-阶段1：需求理解 → 不明确必须提问
-阶段2：背景调研 → 阅读相关文件，理解现有实现（禁止编码）
-阶段3：方案设计 → 输出技术方案，暂停等待用户评审
-阶段4：实施执行 → 评审通过后，严格按方案执行
-阶段5：质量验证 → 代码质量、控制台错误检查
-阶段6：文档同步 → 代码更新后，需更新相关文档
-阶段7：总结交付 → 列出修改文件、测试点、后续建议
+## 技术栈
 
-## 任务类型判断
+- **前端**：uni-app 3 (Vue 3 + Vite)、Pinia、ant-design-vue、ECharts、Day.js
+- **后端**：Node.js 20、Express 5、Mongoose 8、JWT、node-cron
+- **数据库**：MongoDB 7+
+- **部署**：Sealos Devbox + 前端静态托管
 
-**需要方案评审：** 添加功能、修改代码、重构、修复复杂bug、修改类型定义
-**可直接执行：** 代码阅读分析、查询信息、解释逻辑、Code Review、回答问题
-**灰色地带：** 主动询问用户
+## 快速开始
 
-## 方案必须包含
+### 后端
 
-- 需求概述
-- 技术方案（架构/流程）
-- 影响范围（新增/修改的文件清单）
-- 实施步骤
-- 风险评估
-- 测试计划
+```bash
+cd apps/backend
+cp .env.production.example .env.development   # 按需修改数据库连接
+npm install
+npm run dev          # 开发模式
+npm run start:prod   # 生产模式（需先配置 .env.production）
+```
 
-## 质量标准
+### 前端
 
-- 工程原则：SOLID、DRY、关注点分离
-- 代码质量：清晰命名、合理抽象、必要注释
-- 性能意识：算法复杂度、内存使用、IO优化
-- 必须通过 type-check
+```bash
+cd apps/frontend
+npm install
+npm run dev:h5       # H5 开发
+npm run build:h5     # H5 生产构建
+npm run test         # Vitest 测试
+```
 
-## 工作准则
+## 文档索引
 
-1. **透明性** - 允许说"不知道"，不确定的明确标注
-2. **沟通优先** - 有不明白的地方必须询问
-3. **方案先行** - 方案阶段只给架构思路，不给具体代码
-4. **批判性思维** - 评估可行性，识别风险，提出更优方案
-5. **渐进式实施** - 复杂任务分步骤，每步验证后再继续
-6. **质量第一** - 代码质量优于开发速度
+- [后端部署说明](apps/backend/DEPLOY.md)
+- [前端 Sealos 部署说明](apps/frontend/DEPLOY_SEALOS.md)
+- [API 接口文档](docs/apidoc.md)
+- [外部服务配置](docs/external-services.md)
+- [需求 PRD](docs/需求prd.md)
+- [开发工作指导](WORKFLOW.md)
 
-## 禁止事项
+## 环境变量
 
-- 未经评审修改代码（即使是"小修改"）
-- 跳过工作流程阶段
-- 需求模糊时继续执行
-- 擅自扩大修改范围
-- 奉承敷衍，不实事求是
+后端环境变量文件（均已被 Git 忽略）：
 
-## 文档维护规范
+- `apps/backend/.env`：本地开发默认
+- `apps/backend/.env.development`：开发/测试环境
+- `apps/backend/.env.production`：生产环境
+- `apps/backend/.env.production.example`：生产环境模板（已纳入版本库）
 
-INFO/
-├── task/ # 任务文档：需求分析、技术方案
-├── changelog/ # 变更日志：每次提交的改动记录
-├── project/ # 项目文档：架构、业务流程、开发指南
+首次在新机器/新环境部署时，请参考 [apps/backend/DEPLOY.md](apps/backend/DEPLOY.md) 手动创建 `.env.production`。
 
-**任务全周期文档管理：**
+## 重要提醒
 
-- **任务开始前**：在 task/ 创建需求分析和技术方案文档
-- **任务进行中**：及时补充方案变更和关键决策
-- **任务完成后**：在 changelog/ 记录变更，更新 project/ 相关文档
-
+- `.env.production` 等敏感环境文件**不会进入 Gitee**，跨设备部署时务必手动同步。
+- 生产环境启动必须使用 `NODE_ENV=production` 模式，否则可能误连本地开发数据库。
+- 提交代码前请确认没有暴露真实 Token、密码等敏感信息。

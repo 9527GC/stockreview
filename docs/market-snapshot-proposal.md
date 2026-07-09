@@ -87,7 +87,7 @@ GET /api/market/overview?date=2026-06-27
 
 ### 2.3 前端按交易日期调用不同大盘接口
 
-修改 [`TradeModal.vue`](Stock%20Review/uni-preset-vue-vite/uni-preset-vue-vite/src/components/TradeModal.vue)：
+修改 [`TradeModal.vue`](apps/frontend/src/components/TradeModal.vue)：
 
 ```js
 watch(() => [formState.market, formState.date], ([newMarket, newDate]) => {

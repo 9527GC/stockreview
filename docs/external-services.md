@@ -1,10 +1,10 @@
-下·# 外部服务配置
+# 外部服务配置
 
 本文档记录项目依赖的外部服务配置，包括行情数据源、MCP 服务连接等。
 
 ## 安全提醒
 
-- **API Token 属于敏感信息**，已写入 `server-side-project/.env*` 文件（已加入 `.gitignore`，不会进入版本控制）。
+- **API Token 属于敏感信息**，已写入 `apps/backend/.env*` 文件（已加入 `.gitignore`，不会进入版本控制）。
 - **MCP 服务配置属于客户端配置**，建议放在 Claude Code 的本地 `settings.json` 中，不要提交到仓库。
 - 提交代码前请确认没有意外把 `.env` 或 `settings.json` 中的真实 Token 暴露出来。
 
@@ -18,12 +18,12 @@
 
 配置位置：
 
-- `server-side-project/.env`
-- `server-side-project/.env.development`
-- `server-side-project/.env.production`
+- `apps/backend/.env`
+- `apps/backend/.env.development`
+- `apps/backend/.env.production`
 
 ```env
-TUSHARE_TOKEN=5846ec76a5d7a07d1e1054009a4b2c9909cdf5caed83324b5de5d1a3
+TUSHARE_TOKEN=<YOUR_TUSHARE_TOKEN>
 ```
 
 后端代码中读取方式：
@@ -69,19 +69,19 @@ const token = process.env.TUSHARE_TOKEN;
 
 ### 1. 个股历史日线
 
-- **当前来源**：腾讯历史 K 线、东方财富历史 K 线、搜狐历史行情（`server-side-project/src/utils/historicalQuotes.js`）
+- **当前来源**：腾讯历史 K 线、东方财富历史 K 线、搜狐历史行情（`apps/backend/src/utils/historicalQuotes.js`）
 - **可替换为**：`tushare.daily`（未复权） + `tushare.adj_factor`（复权）
 - **评价**：数据质量稳定，覆盖全历史，适合批量替换；但需要注意 `daily` 返回的成交量单位是“手”、成交额单位是“千元”，与现有字段单位可能不同。
 
 ### 2. 指数历史日线
 
-- **当前来源**：腾讯历史 K 线（`server-side-project/src/utils/marketData.js`： `getHistoricalIndexSnapshot` / `getHistoricalIndexSeries`）
+- **当前来源**：腾讯历史 K 线（`apps/backend/src/utils/marketData.js`： `getHistoricalIndexSnapshot` / `getHistoricalIndexSeries`）
 - **可替换为**：`tushare.index_daily`
 - **评价**：5000 积分已覆盖，可替换上证指数、深证成指、创业板指的历史日线。数据稳定，且包含开盘/最高/最低/收盘/成交量等完整字段。
 
 ### 3. 股票搜索/列表
 
-- **当前来源**：腾讯 Smartbox、东方财富 Suggest（`server-side-project/src/services/stockSearchService.js`）
+- **当前来源**：腾讯 Smartbox、东方财富 Suggest（`apps/backend/src/services/stockSearchService.js`）
 - **可替换为**：`tushare.stock_basic`
 - **评价**：`stock_basic` 返回全市场 A 股列表，支持本地缓存后实现模糊搜索；但无法像 Smartbox 那样支持实时拼音/关键词联想，建议保留腾讯/东财作为搜索，Tushare 用于补充基础信息。
 

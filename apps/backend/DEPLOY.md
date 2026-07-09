@@ -10,7 +10,7 @@
 
 ## 已做的防护
 
-[server-side-project/src/index.js](src/index.js) 已增加强校验：
+[apps/backend/src/index.js](src/index.js) 已增加强校验：
 
 - 生产环境启动时，如果 `.env.production` 不存在，服务会直接 `FATAL` 退出，不会再回退到 `.env`。
 - 开发环境仍可回退到 `.env`，保持本地开发体验。
@@ -20,7 +20,7 @@
 1. **复制生产环境配置模板**：
 
    ```bash
-   cd server-side-project
+   cd apps/backend
    cp .env.production.example .env.production
    ```
 
@@ -66,17 +66,17 @@
    cd "e:/项目/Stock Review"
 
    # 同步源码
-   scp -r server-side-project/src \
+   scp -r apps/backend/src \
        bja.sealos.run_ns-rojp4s9y_stockreview:/home/devbox/project/
 
-   scp server-side-project/entrypoint.sh \
-       server-side-project/.gitattributes \
-       server-side-project/package.json \
-       server-side-project/package-lock.json \
+   scp apps/backend/entrypoint.sh \
+       apps/backend/.gitattributes \
+       apps/backend/package.json \
+       apps/backend/package-lock.json \
        bja.sealos.run_ns-rojp4s9y_stockreview:/home/devbox/project/
 
    # 单独同步 .env.production（或直接在 Devbox 上创建）
-   scp server-side-project/.env.production \
+   scp apps/backend/.env.production \
        bja.sealos.run_ns-rojp4s9y_stockreview:/home/devbox/project/
    ```
 
@@ -102,7 +102,7 @@
 ## 检查清单（每次在新机器/新环境部署前勾选）
 
 - [ ] 已从当前生产环境或已部署机器获取正确的 `.env.production`。
-- [ ] 已在 `server-side-project/` 目录下创建 `.env.production`。
+- [ ] 已在 `apps/backend/` 目录下创建 `.env.production`。
 - [ ] `MONGODB_URI` 指向 Sealos 生产 MongoDB，而非 `localhost`。
 - [ ] `CORS_ORIGINS` 包含 `https://stock.gc9527.com`。
 - [ ] Devbox 上 `/home/devbox/project/.env.production` 已存在且内容正确。

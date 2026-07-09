@@ -20,14 +20,14 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: server-side-project/package-lock.json
-      - working-directory: server-side-project
+          cache-dependency-path: apps/backend/package-lock.json
+      - working-directory: apps/backend
         run: npm ci
-      - working-directory: server-side-project
+      - working-directory: apps/backend
         run: npm audit
-      - working-directory: server-side-project
+      - working-directory: apps/backend
         run: npm run lint
-      - working-directory: server-side-project
+      - working-directory: apps/backend
         run: npm test
         env:
           TEST_MONGODB_URI: mongodb://localhost:27017/stock_review_test
@@ -40,10 +40,10 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: "Stock Review/uni-preset-vue-vite/uni-preset-vue-vite/package-lock.json"
-      - working-directory: "Stock Review/uni-preset-vue-vite/uni-preset-vue-vite"
+          cache-dependency-path: apps/frontend/package-lock.json
+      - working-directory: apps/frontend
         run: npm ci
-      - working-directory: "Stock Review/uni-preset-vue-vite/uni-preset-vue-vite"
+      - working-directory: apps/frontend
         run: npm run test
-      - working-directory: "Stock Review/uni-preset-vue-vite/uni-preset-vue-vite"
+      - working-directory: apps/frontend
         run: npm run build:h5
