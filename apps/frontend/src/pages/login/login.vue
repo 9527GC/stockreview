@@ -125,6 +125,8 @@ const handleLogin = async () => {
     }, 500)
   } catch (err) {
     console.error('Login failed:', err);
+    const msg = err?.message || '';
+    message.error(msg === 'Invalid credentials' ? '账号或密码错误' : '登录失败，请重试');
   } finally {
     loading.value = false;
   }

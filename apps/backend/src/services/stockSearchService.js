@@ -48,6 +48,8 @@ const inferMarketFromEastmoney = (item) => {
   const jys = String(item.JYS || '').toUpperCase();
   const classify = String(item.Classify || '').toUpperCase();
   const typeName = String(item.SecurityTypeName || '');
+  const quoteId = String(item.QuoteID || '');
+  const marketType = String(item.MarketType || '');
 
   if (jys === 'HK' || classify === 'HK') return 'HK';
 
@@ -55,12 +57,18 @@ const inferMarketFromEastmoney = (item) => {
   if (US_CLASSIFY.has(classify)) return 'US';
   if (typeName.includes('美') || typeName.includes('粉单')) return 'US';
 
+  // 东方财富 QuoteID 规则：1.xxx 为沪市，0.xxx 为深市；基金/ETF 也能据此区分
+  if (quoteId.startsWith('1.')) return 'SH';
+  if (quoteId.startsWith('0.')) return 'SZ';
+
   if (typeName.includes('沪')) return 'SH';
   if (typeName.includes('深')) return 'SZ';
   if (typeName.includes('北')) return 'BJ';
 
   // A 股兜底：未识别到沪/深/北时归为 SH
   if (classify === 'ASTOCK') return 'SH';
+  // 基金（含场内 ETF）兜底归为 A 股，因 A 股基金/ETF 使用沪深代码
+  if (classify === 'FUND' || typeName.includes('基金')) return 'SH';
 
   return null;
 };
@@ -92,8 +100,24 @@ const searchTencent = async (keyword) => {
   return items.map((item) => {
     const parts = item.split('~');
     if (parts.length < 4) return null;
-    const [code, name, , market] = parts;
-    const mappedMarket = marketMap[String(market).toLowerCase()] || market.toUpperCase();
+    // 腾讯返回两种格式：
+    // 1. 股票：code~name~pinyin~market~type
+    // 2. 基金/ETF：market~code~name~pinyin~type（market 字段前置，且 name 在第三位）
+    const firstPart = String(parts[0]).toLowerCase();
+    let code, name, rawMarket;
+    if (['sh', 'sz', 'hk', 'us'].includes(firstPart)) {
+      // ETF/基金格式：market~code~name~pinyin~type
+      if (parts.length < 5) return null;
+      code = parts[1];
+      name = parts[2];
+      rawMarket = parts[0];
+    } else {
+      // 股票格式：code~name~pinyin~market~type
+      code = parts[0];
+      name = parts[1];
+      rawMarket = parts[3];
+    }
+    const mappedMarket = marketMap[String(rawMarket).toLowerCase()] || rawMarket.toUpperCase();
     const symbol = normalizeSearchSymbol(code, mappedMarket);
     if (!symbol) return null;
     return { symbol, name: name.trim(), market: mappedMarket };

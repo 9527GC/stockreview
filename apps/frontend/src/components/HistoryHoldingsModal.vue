@@ -7,6 +7,7 @@
     width="1000px"
     centered
     wrapClassName="history-holdings-modal"
+    :style="{ paddingBottom: 0 }"
   >
     <a-table
       :columns="columns"
@@ -20,6 +21,7 @@
       :expandedRowKeys="expandedRowKeys"
       @expandedRowsChange="handleExpandedRowsChange"
       @expand="handleExpand"
+      :scroll="{ y: 'calc(80vh - 220px)' }"
     >
       <template #expandColumnTitle>
         <span class="expand-column-title">详情</span>
@@ -149,9 +151,9 @@ const store = useTradeStore();
 const loading = ref(false);
 const historyHoldings = ref([]);
 const currentPage = ref(1);
-const pageSize = ref(20);
+const pageSize = ref(10);
 const total = ref(0);
-const sort = ref('-cumulativeProfit');
+const sort = ref('-lastTradeDate');
 const expandedRowKeys = ref([]);
 const expandedBySymbol = ref({});
 
@@ -342,7 +344,8 @@ const columns = [
     dataIndex: 'lastTradeDate',
     key: 'lastTradeDate',
     width: 170,
-    sorter: true
+    sorter: true,
+    defaultSortOrder: 'descend'
   },
   {
     title: '交易次数',
@@ -380,7 +383,7 @@ watch(
   (isOpen) => {
     if (isOpen) {
       currentPage.value = 1;
-      sort.value = '-cumulativeProfit';
+      sort.value = '-lastTradeDate';
       fetchHistoryHoldings();
     } else {
       historyHoldings.value = [];
@@ -392,3 +395,41 @@ watch(
   { immediate: true }
 );
 </script>
+
+<style scoped>
+/* 保持 scoped 样式区域存在，避免空 style 标签 */
+</style>
+
+<style>
+/* 弹框最大高度 80vh，内容区可滚动 */
+.history-holdings-modal .ant-modal {
+  max-height: 80vh !important;
+  margin: 0 auto;
+  padding-bottom: 0;
+}
+
+.history-holdings-modal .ant-modal-content {
+  max-height: 80vh !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+}
+
+.history-holdings-modal .ant-modal-body {
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  min-height: 0 !important;
+  padding: 24px !important;
+  box-sizing: border-box !important;
+}
+
+.history-holdings-modal .ant-table-wrapper,
+.history-holdings-modal .ant-spin-nested-loading,
+.history-holdings-modal .ant-spin-container,
+.history-holdings-modal .ant-table,
+.history-holdings-modal .ant-table-container {
+  min-height: 0;
+}
+</style>

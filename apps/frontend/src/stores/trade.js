@@ -218,13 +218,15 @@ export const useTradeStore = defineStore('trade', () => {
     if (upper.endsWith('.SH')) {
       const code = upper.replace('.SH', '');
       if (code.startsWith('688')) return { text: '科', color: '#f5222d' }; // 科创板
-      if (/^5|^51|^56|^58/.test(code)) return { text: '基', color: '#f5222d' }; // 基金
+      // 沪市场内基金/ETF：50/51/56/58/513/518/560/580/588 等
+      if (/^(50|51|56|58|513|518|560|580|588)/.test(code)) return { text: '基', color: '#f5222d' }; // 基金/ETF
       return { text: 'SH', color: '#f5222d' }; // 沪市主板
     }
     if (upper.endsWith('.SZ')) {
       const code = upper.replace('.SZ', '');
       if (/^300|^301/.test(code)) return { text: '创', color: '#f5222d' }; // 创业板
-      if (/^15|^16/.test(code)) return { text: '基', color: '#f5222d' }; // 基金
+      // 深市场内基金/ETF：15/16/159 开头
+      if (/^(15|16|159)/.test(code)) return { text: '基', color: '#f5222d' }; // 基金/ETF
       return { text: 'SZ', color: '#f5222d' }; // 深市主板/中小板
     }
     if (upper.endsWith('.BJ')) {
