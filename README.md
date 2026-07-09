@@ -22,6 +22,47 @@ Stock Review/
 - **数据库**：MongoDB 7+
 - **部署**：Sealos Devbox + 前端静态托管
 
+## 部署流程（手动发版到 Sealos Devbox）
+
+每次发布到生产环境时，按以下顺序执行，避免旧产物或旧代码造成异常。
+
+### 1. 更新后端到 Sealos Devbox
+
+- 确认本地 `.env.production` 已填写真实的 `MONGODB_URI`、`JWT_SECRET`、`TUSHARE_TOKEN`。
+- 将后端源码、入口脚本及环境文件同步到 Devbox：
+
+  ```bash
+  cd apps/backend
+  scp -r src entrypoint.sh .gitattributes package.json package-lock.json \
+      bja.sealos.run_ns-rojp4s9y_stockreview:/home/devbox/project/
+  scp .env.production bja.sealos.run_ns-rojp4s9y_stockreview:/home/devbox/project/
+  ```
+
+- 在 Devbox 上验证 `.env.production` 中的 `MONGODB_URI` 不是 `localhost`。
+- 使用 `./entrypoint.sh prod` 或 `NODE_ENV=production npm run start:prod` 启动生产服务。
+
+### 2. 构建前端（构建前务必删除旧 dist）
+
+- 先删除旧的 `dist` 目录，避免 uni-app 增量构建时残留旧文件或旧哈希：
+
+  ```bash
+  cd apps/frontend
+  rm -rf dist
+  npm run build:h5
+  ```
+
+- 构建产物位于 `apps/frontend/dist/build/h5`，按前端托管方案进行发布。
+
+### 3. 同步源码到 Gitee master
+
+- 将本次改动（不含 `dist`，前端构建产物通常由 `.gitignore` 忽略）提交并推送：
+
+  ```bash
+  git add apps/backend apps/frontend/src
+  git commit -m "deploy: 更新后端到 devbox、构建前端并同步 Gitee master"
+  git push origin master:master
+  ```
+
 ## 快速开始
 
 ### 后端
