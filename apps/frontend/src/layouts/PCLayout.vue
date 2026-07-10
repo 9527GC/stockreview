@@ -58,17 +58,23 @@
         <a-dropdown placement="topLeft">
           <div :class="collapsed ? 'sider-user-info-collapsed' : 'sider-user-info'">
             <a-avatar size="small" :src="safeAvatar" style="background-color: #1890ff; vertical-align: middle;">
-              {{ userInfo?.nickname?.charAt(0) || 'A' }}
+              {{ userStore.userInfo?.nickname?.charAt(0) || 'A' }}
             </a-avatar>
-            <span v-if="!collapsed" class="username">{{ userInfo?.nickname || 'Admin' }}</span>
+            <span v-if="!collapsed" class="username">{{ userStore.userInfo?.nickname || 'Admin' }}</span>
           </div>
           <template #overlay>
-            <a-menu>
-              <a-menu-item key="logout" @click="handleLogout">
+            <a-menu @click="handleUserMenuClick">
+              <a-menu-item key="profile">
+                <template #icon>
+                  <UserOutlined />
+                </template>
+                <span>个人中心</span>
+              </a-menu-item>
+              <a-menu-item key="logout">
                 <template #icon>
                   <LogoutOutlined />
                 </template>
-                <span>退出登录</span>
+                <span>退出账号</span>
               </a-menu-item>
             </a-menu>
           </template>
@@ -102,7 +108,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch } from 'vue';
 import {
   PieChartOutlined,
   FileTextOutlined,
@@ -112,10 +118,12 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   LeftOutlined,
-  RightOutlined
+  RightOutlined,
+  UserOutlined
 } from '@ant-design/icons-vue';
 import TradeModal from '@/components/TradeModal.vue';
 import { useTradeStore } from '@/stores/trade';
+import { useUserStore } from '@/stores/user';
 import { message } from 'ant-design-vue';
 
 const props = defineProps({
@@ -130,26 +138,15 @@ const props = defineProps({
 });
 
 const store = useTradeStore();
+const userStore = useUserStore();
 const collapsed = ref(false);
 const selectedKeys = ref([props.activeKey]);
 const isModalVisible = ref(false);
-const userInfo = ref(null);
 const safeAvatar = computed(() => {
-  const avatar = userInfo.value?.avatar;
+  const avatar = userStore.userInfo?.avatar;
   if (!avatar || typeof avatar !== 'string') return undefined;
   if (/^https:\/\/example\.com\//i.test(avatar)) return undefined;
   return avatar;
-});
-
-onMounted(() => {
-  try {
-    const storedUserInfo = uni.getStorageSync('userInfo');
-    if (storedUserInfo) {
-      userInfo.value = JSON.parse(storedUserInfo);
-    }
-  } catch (e) {
-    console.error('Failed to parse userInfo', e);
-  }
 });
 
 watch(() => props.activeKey, (newVal) => {
@@ -164,9 +161,16 @@ const handleMenuClick = ({ key }) => {
   }
 };
 
+const handleUserMenuClick = ({ key }) => {
+  if (key === 'profile') {
+    uni.navigateTo({ url: '/pages/user/profile' });
+  } else if (key === 'logout') {
+    handleLogout();
+  }
+};
+
 const handleLogout = () => {
-  uni.removeStorageSync('token');
-  uni.removeStorageSync('userInfo');
+  userStore.logout();
   uni.reLaunch({ url: '/pages/login/login' });
 };
 

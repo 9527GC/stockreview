@@ -3,6 +3,8 @@ const User = require('../models/User');
 const TokenBlacklist = require('../models/TokenBlacklist');
 const jwt = require('jsonwebtoken');
 
+const { formatUserProfile } = require('./userController');
+
 const TOKEN_EXPIRES_IN = '7d';
 
 const generateToken = (user) => {
@@ -26,11 +28,7 @@ exports.login = async (req, res) => {
 
     res.json({
       token,
-      userInfo: {
-        id: user._id,
-        nickname: user.nickname,
-        avatar: user.avatar
-      }
+      userInfo: formatUserProfile(user)
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -68,11 +66,7 @@ exports.register = async (req, res) => {
 
     res.status(201).json({
       token,
-      userInfo: {
-        id: user._id,
-        nickname: user.nickname,
-        avatar: user.avatar
-      }
+      userInfo: formatUserProfile(user)
     });
   } catch (error) {
     res.status(500).json({ message: error.message });

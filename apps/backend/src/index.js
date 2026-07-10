@@ -47,6 +47,7 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 
 const authRoutes = require('./routes/authRoutes');
+const userRoutes = require('./routes/userRoutes');
 const assetRoutes = require('./routes/assetRoutes');
 const tradeRoutes = require('./routes/tradeRoutes');
 const transferRoutes = require('./routes/transferRoutes');
@@ -122,8 +123,12 @@ app.get('/', (req, res) => {
   res.json({ message: 'Stock Review System API is running' });
 });
 
+// Static files for uploaded avatars
+app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
+
 // Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
 app.use('/api/assets', assetRoutes);
 app.use('/api/trades', tradeRoutes);
 app.use('/api/transfers', transferRoutes);

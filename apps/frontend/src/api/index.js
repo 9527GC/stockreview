@@ -1,4 +1,5 @@
 import request from '../utils/request';
+import { appConfig } from '@/config/env';
 
 // Authentication
 export const login = (data) => {
@@ -168,5 +169,72 @@ export const getRealTimeQuote = (symbol) => {
     url: '/api/market/quote',
     method: 'GET',
     params: { symbol }
+  });
+};
+
+// User Profile
+export const getProfile = () => {
+  return request({
+    url: '/api/users/me',
+    method: 'GET'
+  });
+};
+
+export const updateProfile = (data) => {
+  return request({
+    url: '/api/users/me',
+    method: 'PUT',
+    data
+  });
+};
+
+export const changePassword = (data) => {
+  return request({
+    url: '/api/users/password',
+    method: 'PUT',
+    data
+  });
+};
+
+export const getWechatBindUrl = () => {
+  return request({
+    url: '/api/users/wechat/bind-url',
+    method: 'POST'
+  });
+};
+
+export const unbindWechat = () => {
+  return request({
+    url: '/api/users/wechat/bind',
+    method: 'DELETE'
+  });
+};
+
+export const uploadAvatar = (filePath) => {
+  return new Promise((resolve, reject) => {
+    const token = uni.getStorageSync('token');
+    const baseUrl = appConfig.apiBaseUrl || '';
+    uni.uploadFile({
+      url: `${baseUrl}/api/users/avatar`,
+      filePath,
+      name: 'avatar',
+      header: {
+        Authorization: token ? `Bearer ${token}` : ''
+      },
+      success: (res) => {
+        let data;
+        try {
+          data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+        } catch (e) {
+          data = res.data;
+        }
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(data);
+        } else {
+          reject(data);
+        }
+      },
+      fail: reject
+    });
   });
 };

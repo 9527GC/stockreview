@@ -13,6 +13,8 @@ const userSchema = new mongoose.Schema({
   password: { type: String, required: true },
   nickname: { type: String },
   avatar: { type: String },
+  wechatOpenId: { type: String, unique: true, sparse: true },
+  wechatUnionId: { type: String, unique: true, sparse: true },
   commissionPreference: {
     type: Map,
     of: commissionPreferenceSchema,
@@ -22,7 +24,7 @@ const userSchema = new mongoose.Schema({
       US: { mode: 'rate', rate: 5, amount: 0 }
     }
   }
-});
+}, { timestamps: true });
 
 userSchema.pre('save', async function(next) {
   if (!this.isModified('password')) return next();

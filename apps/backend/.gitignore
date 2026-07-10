@@ -23,3 +23,6 @@ Thumbs.db
 my-project.txt
 my-project.tar.gz
 download.html
+
+# 头像上传文件不上传 Git
+uploads/

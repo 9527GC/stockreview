@@ -65,6 +65,7 @@ import { ref, onMounted, reactive } from 'vue'
 import { message } from 'ant-design-vue'
 import { login } from '@/api/index'
 import { appConfig } from '@/config/env'
+import { useUserStore } from '@/stores/user'
 import {
   UserOutlined,
   LockOutlined,
@@ -81,6 +82,7 @@ const loading = ref(false)
 const loginBackgroundStyle = appConfig.loginBackgroundUrl
   ? { backgroundImage: `url('${appConfig.loginBackgroundUrl}')` }
   : {}
+const userStore = useUserStore()
 
 // Initialize username from storage
 onMounted(() => {
@@ -112,6 +114,7 @@ const handleLogin = async () => {
 
     uni.setStorageSync('token', res.token);
     uni.setStorageSync('userInfo', JSON.stringify(res.userInfo));
+    userStore.setUserInfo(res.userInfo);
 
     // Save auto-login preference and username
     uni.setStorageSync('autoLogin', autoLogin.value ? 'true' : 'false');
