@@ -661,48 +661,43 @@ export const useTradeStore = defineStore('trade', () => {
   // Total Assets
   const totalAssets = computed(() => {
     if (assetsSummary.value) return assetsSummary.value.totalAssets;
-    return currentPrincipal.value + totalProfit.value;
+    return 0;
   });
 
   // Current Principal (Original + Transfers)
   const currentPrincipal = computed(() => {
     if (assetsSummary.value) return assetsSummary.value.currentPrincipal;
-    const transferTotalCNY = transferRecords.value.reduce((sum, record) => {
-      const rate = exchangeRates[record.currency || 'CNY'] || 1;
-      const amountCNY = record.amount * rate;
-      return sum + (record.type === 'IN' ? amountCNY : -amountCNY);
-    }, 0);
-    return totalPrincipal.value + transferTotalCNY;
+    return 0;
   });
   
   // Total Profit
   const totalProfit = computed(() => {
       if (assetsSummary.value) return assetsSummary.value.totalProfit;
-      return holdings.value.reduce((sum, h) => sum + (h.cumulativeProfit || 0), 0);
+      return 0;
   });
 
   // Holdings Market Value
   const holdingsMarketValue = computed(() => {
     if (assetsSummary.value) return assetsSummary.value.holdingsMarketValue;
-    return holdings.value.reduce((sum, h) => sum + (h.marketValueCNY ?? h.marketValue ?? 0), 0);
+    return 0;
   });
 
   // Cash
   const cash = computed(() => {
     if (assetsSummary.value) return assetsSummary.value.cash;
-    return totalAssets.value - holdingsMarketValue.value;
+    return 0;
   });
 
   // Total Daily Profit
   const totalDailyProfit = computed(() => {
     if (assetsSummary.value) return assetsSummary.value.totalDailyProfit;
-    return holdings.value.reduce((sum, h) => sum + (h.dailyProfit || 0), 0);
+    return 0;
   });
 
   // Total Holdings Count
   const totalHoldingsCount = computed(() => {
     if (assetsSummary.value) return assetsSummary.value.totalHoldingsCount;
-    return holdings.value.length;
+    return 0;
   });
 
   // Get History Holdings (Cleared positions)

@@ -124,37 +124,6 @@ watch(() => selectedDate.value, (newDate, oldDate) => {
   }
 });
 
-// 让收益日历上的"今天"跟随 store 的今日盈亏自动更新
-watch(() => store.totalDailyProfit, (newProfit) => {
-  const today = dayjs();
-  if (
-    selectedDate.value.year() !== today.year() ||
-    selectedDate.value.month() !== today.month()
-  ) {
-    return;
-  }
-
-  const newValue = toFiniteNumber(newProfit);
-  if (newValue === null) return;
-
-  const todayKey = today.format('YYYY-MM-DD');
-  const oldValue = toFiniteNumber(apiProfitData.value[todayKey]) ?? 0;
-
-  apiProfitData.value = {
-    ...apiProfitData.value,
-    [todayKey]: newValue
-  };
-
-  // 同步更新月盈亏统计
-  if (apiStats.value) {
-    const currentTotal = toFiniteNumber(apiStats.value.totalProfit) ?? 0;
-    apiStats.value = {
-      ...apiStats.value,
-      totalProfit: Number((currentTotal - oldValue + newValue).toFixed(2))
-    };
-  }
-});
-
 const getProfitForDate = (date) => {
   const dateStr = getDateKey(date);
   if (!dateStr) return null;
