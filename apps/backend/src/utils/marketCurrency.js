@@ -1,18 +1,28 @@
 const { normalizeSymbol } = require('./symbol');
 
-const CNY_MARKETS = new Set(['CN', 'SH', 'SZ', 'A', 'A股']);
+const CNY_MARKETS = new Set(['CN', 'SH', 'SZ', 'BJ', 'A', 'A股']);
 const HKD_MARKETS = new Set(['HK', '港股']);
 const USD_MARKETS = new Set(['US', '美股']);
 
-const getCurrencyForMarket = ({ symbol, market } = {}) => {
+const getCurrencyByMarket = (market) => {
   const normalizedMarket = String(market || '').trim().toUpperCase();
+  if (CNY_MARKETS.has(normalizedMarket)) return 'CNY';
+  if (HKD_MARKETS.has(normalizedMarket)) return 'HKD';
+  if (USD_MARKETS.has(normalizedMarket)) return 'USD';
+  return null;
+};
+
+const getCurrencyForMarket = ({ symbol, market } = {}) => {
   const normalizedSymbol = normalizeSymbol(symbol);
   const symbolMarket = normalizedSymbol.split('.').pop();
-  const resolvedMarket = normalizedMarket || symbolMarket;
+  const symbolCurrency = getCurrencyByMarket(symbolMarket);
+  const marketCurrency = getCurrencyByMarket(market);
 
-  if (CNY_MARKETS.has(resolvedMarket)) return 'CNY';
-  if (HKD_MARKETS.has(resolvedMarket)) return 'HKD';
-  if (USD_MARKETS.has(resolvedMarket)) return 'USD';
+  if (symbolCurrency && marketCurrency && symbolCurrency !== marketCurrency) {
+    throw new RangeError(`Symbol currency ${symbolCurrency} conflicts with market currency ${marketCurrency}`);
+  }
+
+  if (symbolCurrency || marketCurrency) return symbolCurrency || marketCurrency;
 
   throw new RangeError(`Unsupported market for currency: ${market || symbol || ''}`);
 };
