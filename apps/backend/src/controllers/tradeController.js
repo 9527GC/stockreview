@@ -10,7 +10,7 @@ const { toMoney } = require('../utils/money');
 const { getCurrencyForMarket } = require('../utils/marketCurrency');
 const { round2, calculateDailyProfitFromPosition } = require('../utils/pnl');
 const { normalizeSymbol, buildSymbolAliases } = require('../utils/symbol');
-const { calculateDilutedPerformance, calculateDilutedProfits, calculatePositionZeroGroups } = require('../utils/cost');
+const { calculateWeightedAveragePerformance, calculateClosedPositionCycles, calculateDilutedPerformance, calculateDilutedProfits, calculatePositionZeroGroups } = require('../utils/cost');
 const { upsertTodayDailyProfit } = require('../utils/dailyProfitBackfill');
 const { sanitizeHtml } = require('../utils/sanitizeHtml');
 const { getDateStringInOffset, getQuoteDateKeyInOffset } = require('../utils/dailyProfit');
@@ -133,7 +133,7 @@ const rebuildAssetFromLedger = async (userId) => {
   ]);
 
   const existingBySymbol = new Map(existingHoldings.map(h => [normalizeSymbol(h.symbol), h]));
-  const performanceBySymbol = calculateDilutedPerformance({ trades: tradesAsc, rates: await getRates() });
+  const performanceBySymbol = calculateWeightedAveragePerformance({ trades: tradesAsc, rates: await getRates() });
   const targetBySymbol = new Map();
   performanceBySymbol.forEach((perf) => {
     if (perf.quantity <= 0) return;
@@ -188,9 +188,7 @@ const rebuildAssetFromLedger = async (userId) => {
   // All asset values and cached close prices are written through the sole valuation entry point.
   await refreshAssetMarketValue(userId);
 };
-const buildTradePerformanceBySymbol = ({ trades, rates }) => {
-  return calculateDilutedPerformance({ trades, rates });
-};
+const buildTradePerformanceBySymbol = ({ trades, rates }) => calculateWeightedAveragePerformance({ trades, rates });
 
 const getTradeSnapshotView = (trade) => {
   const snapshot = normalizeMarketOverviewSnapshot(trade?.marketOverviewSnapshot || trade?.marketOverview);
@@ -221,6 +219,7 @@ exports.getHoldings = async (req, res) => {
     ]);
     const cashCNY = asset?.cash || 0;
     const performanceBySymbol = buildTradePerformanceBySymbol({ trades: tradesAsc, rates: RATES });
+    const dilutedPerformanceBySymbol = calculateDilutedPerformance({ trades: tradesAsc, rates: RATES });
 
     // 计算每只股票最近一次交易时间，用于前端默认排序
     const lastTradeDateBySymbol = new Map();
@@ -295,16 +294,13 @@ exports.getHoldings = async (req, res) => {
       const rate = RATES[h.currency] || 1;
       const marketValueCNY = marketValue !== null ? marketValue * rate : null;
       const perf = performanceBySymbol.get(normalizeSymbol(h.symbol));
-      const {
-        unrealizedProfit,
-        cumulativeProfit,
-        realizedProfit
-      } = calculateDilutedProfits({
-        currentPrice,
-        quantity: h.quantity,
-        avgCost: h.avgCost,
-        rate
-      });
+      const diluted = dilutedPerformanceBySymbol.get(normalizeSymbol(h.symbol));
+      const { unrealizedProfit } = calculateDilutedProfits({ currentPrice, quantity: h.quantity, avgCost: h.avgCost, rate });
+      const realizedProfit = perf?.realizedProfitCNY || 0;
+      const cumulativeProfit = round2(realizedProfit + unrealizedProfit);
+      const dilutedUnrealizedProfit = diluted
+        ? calculateDilutedProfits({ currentPrice, quantity: h.quantity, avgCost: diluted.dilutedAvgCost, rate }).unrealizedProfit
+        : null;
       const totalInvestmentCNY = (perf?.totalBuyCost || 0) * rate;
       profitRate = cumulativeProfit !== null
         ? parseFloat((totalInvestmentCNY > 0 ? (cumulativeProfit / totalInvestmentCNY) : 0).toFixed(4))
@@ -315,6 +311,8 @@ exports.getHoldings = async (req, res) => {
         name: h.name,
         quantity: h.quantity,
         avgCost: h.avgCost,
+        dilutedAvgCost: diluted?.dilutedAvgCost ?? null,
+        dilutedUnrealizedProfit,
         currentPrice,
         marketValue,
         marketValueCNY,
@@ -603,23 +601,17 @@ exports.getHistoryHoldings = async (req, res) => {
       Trade.find({ userId }).sort({ date: 1, _id: 1 })
     ]);
 
-    const closed = Array.from(buildTradePerformanceBySymbol({ trades, rates }).values())
-      .filter(x => x.tradesCount > 0 && x.quantity <= 0);
+    const closed = calculateClosedPositionCycles({ trades, rates });
 
     const sortStr = String(sort || '-lastTradeDate');
     const desc = sortStr.startsWith('-');
     const key = desc ? sortStr.slice(1) : sortStr;
     const getKey = (x) => {
-      const rate = rates[x.currency] || 1;
-      const totalBuyCost = x.closedTotalBuyCost || x.totalBuyCost || 0;
-      const totalBuyCostCNY = totalBuyCost * rate;
-      if (key === 'cumulativeProfit') return x.realizedProfitCNY;
-      if (key === 'profitRate') {
-        return totalBuyCostCNY > 0 ? x.realizedProfitCNY / totalBuyCostCNY : 0;
-      }
+      if (key === 'cumulativeProfit') return x.realizedProfit;
+      if (key === 'profitRate') return x.profitRate;
       if (key === 'tradesCount') return x.tradesCount;
-      if (key === 'lastTradeDate') return x.lastTradeDate ? new Date(x.lastTradeDate).getTime() : 0;
-      return x.lastTradeDate ? new Date(x.lastTradeDate).getTime() : 0;
+      if (key === 'lastTradeDate') return x.closedAt ? new Date(x.closedAt).getTime() : 0;
+      return x.closedAt ? new Date(x.closedAt).getTime() : 0;
     };
 
     closed.sort((a, b) => {
@@ -641,17 +633,17 @@ exports.getHistoryHoldings = async (req, res) => {
 
     res.json({
       list: slice.map(x => {
-        const rate = rates[x.currency] || 1;
-        const totalBuyCost = x.closedTotalBuyCost || x.totalBuyCost || 0;
-        const totalBuyCostCNY = totalBuyCost * rate;
-        const profitRate = totalBuyCostCNY > 0 ? x.realizedProfitCNY / totalBuyCostCNY : 0;
         return {
+          cycleId: x.cycleId,
           symbol: x.symbol,
           name: x.name,
-          cumulativeProfit: round2(x.realizedProfitCNY),
-          profitRate: parseFloat(profitRate.toFixed(4)),
-          lastTradeDate: x.lastTradeDate,
-          tradesCount: x.tradesCount
+          cumulativeProfit: round2(x.realizedProfit),
+          profitRate: x.profitRate,
+          lastTradeDate: x.closedAt,
+          openedAt: x.openedAt,
+          closedAt: x.closedAt,
+          tradesCount: x.tradesCount,
+          currency: x.currency
         };
       }),
       total

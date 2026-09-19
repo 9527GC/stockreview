@@ -231,6 +231,36 @@ describe('Trade API', () => {
   });
 });
 
+describe('GET /api/trades/history-holdings', () => {
+  test('同一标的两轮完整清仓按独立周期返回历史持仓', async () => {
+    const trades = [
+      { symbol: '600519.SH', type: 'BUY', price: 10, quantity: 100, date: '2026-06-01T09:30:00+08:00', name: '贵州茅台' },
+      { symbol: '600519.SH', type: 'SELL', price: 11, quantity: 100, date: '2026-06-02T14:30:00+08:00', name: '贵州茅台' },
+      { symbol: '600519.SH', type: 'BUY', price: 20, quantity: 100, date: '2026-06-03T09:30:00+08:00', name: '贵州茅台' },
+      { symbol: '600519.SH', type: 'SELL', price: 22, quantity: 100, date: '2026-06-04T14:30:00+08:00', name: '贵州茅台' }
+    ];
+
+    for (const trade of trades) {
+      const created = await request(app)
+        .post('/api/trades')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ ...trade, commission: 0 });
+      expect(created.statusCode).toBe(201);
+    }
+
+    const res = await request(app)
+      .get('/api/trades/history-holdings?sort=lastTradeDate')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.total).toBe(2);
+    expect(res.body.list).toHaveLength(2);
+    expect(res.body.list.map(item => item.cycleId)).toEqual(['600519.SH:1', '600519.SH:2']);
+    expect(res.body.list.map(item => item.cumulativeProfit)).toEqual([100, 200]);
+    expect(res.body.list.map(item => item.profitRate)).toEqual([0.1, 0.1]);
+    expect(res.body.list.map(item => item.tradesCount)).toEqual([2, 2]);
+  });
+});
 describe('GET /api/trades/history-holdings/:symbol/groups', () => {
   test('单次买入清仓应返回一个分仓，实现盈亏正确', async () => {
     await request(app)

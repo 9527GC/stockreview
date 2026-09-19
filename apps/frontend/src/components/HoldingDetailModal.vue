@@ -70,6 +70,10 @@
             <span class="metric-label">成本金额</span>
             <span class="metric-value">{{ totalCost !== null ? (currencySymbol + totalCost.toFixed(2)) : '--' }}</span>
           </div>
+          <div v-if="holding.dilutedAvgCost !== null && holding.dilutedAvgCost !== undefined" class="metric-item">
+            <span class="metric-label">摊薄成本（参考）</span>
+            <span class="metric-value">{{ currencySymbol }}{{ Number(holding.dilutedAvgCost).toFixed(2) }}</span>
+          </div>
         </div>
 
         <div class="section-title" style="margin-top: 16px; display: flex; justify-content: space-between; align-items: center;">
