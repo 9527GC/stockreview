@@ -69,7 +69,6 @@ const holdingSchema = new mongoose.Schema({
   lastPrice: { type: Number, default: null },
   lastPriceAt: { type: Date, default: null },
   lastPriceDate: { type: String, default: null },
-  lastPriceDate: { type: String, default: null },
   currency: { type: String, default: 'CNY' },
   marketTag: { type: String }
 });

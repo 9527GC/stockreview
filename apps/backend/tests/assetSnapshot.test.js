@@ -4,10 +4,11 @@ jest.mock('../src/utils/currency', () => ({
 
 jest.mock('../src/utils/marketData', () => ({
   getQuotes: jest.fn(),
-  getQuoteLastClose: jest.fn((quote) => ({
-    price: quote?.preClose,
-    date: quote?.quoteDate || null
-  }))
+  getQuoteLastClose: jest.fn((quote) => {
+    const price = Number(quote?.close);
+    const date = String(quote?.closeDate || '');
+    return Number.isFinite(price) && price > 0 && /^\d{4}-\d{2}-\d{2}$/.test(date) ? { price, date } : null;
+  })
 }));
 
 const app = require('../src/index');
@@ -17,6 +18,9 @@ const { Trade, Holding } = require('../src/models/Trade');
 const { Asset } = require('../src/models/Asset');
 const { getQuotes } = require('../src/utils/marketData');
 const { refreshAssetMarketValue } = require('../src/utils/assetSnapshot');
+const { BEIJING_OFFSET_MINUTES, getDateStringInOffset } = require('../src/utils/datetime');
+
+const TODAY = getDateStringInOffset(BEIJING_OFFSET_MINUTES);
 
 let userId;
 
@@ -80,8 +84,10 @@ describe('refreshAssetMarketValue', () => {
       '600519.SH': {
         symbol: '600519.SH',
         price: 50,
-        preClose: 45,
-        quoteDate: '2026-09-19'
+        preClose: 46,
+        quoteDate: TODAY,
+        close: 45,
+        closeDate: '2026-09-18'
       }
     });
 
@@ -97,7 +103,7 @@ describe('refreshAssetMarketValue', () => {
     });
     expect(holding).toMatchObject({
       lastPrice: 45,
-      lastPriceDate: '2026-09-19'
+      lastPriceDate: '2026-09-18'
     });
   });
 });

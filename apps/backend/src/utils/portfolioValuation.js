@@ -1,57 +1,51 @@
 const { normalizeCashBalances, toMoney } = require('./money');
+const { BEIJING_OFFSET_MINUTES, getDateStringInOffset } = require('./datetime');
 
 const isPositiveNumber = (value) => Number.isFinite(Number(value)) && Number(value) > 0;
-
-const normalizeDate = (value) => {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return value.toISOString().slice(0, 10);
-  }
-
-  const date = String(value || '').trim();
-  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
-};
+const isDateString = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || '').trim());
+const normalizeDate = (value) => isDateString(value) ? String(value).trim() : null;
 
 const findQuote = (quotes, symbol) => {
   if (!quotes || typeof quotes !== 'object') return null;
   return quotes[symbol] || Object.values(quotes).find((quote) => quote?.symbol === symbol) || null;
 };
 
-const getQuotePrice = (quote) => {
+// A price is fresh only when the upstream quote explicitly identifies it with this business day.
+// Older dated quotes can still be shown as a stale last-close; undated data is not trustworthy enough to value.
+const getQuotePrice = (quote, asOfDate) => {
   if (!quote) return null;
 
-  if (isPositiveNumber(quote.close)) {
-    return {
-      price: Number(quote.close),
-      priceDate: normalizeDate(quote.closeDate || quote.quoteDate || quote.date),
-      source: 'close',
-      isStale: false
-    };
+  const hasRealtimePrice = isPositiveNumber(quote.price);
+  const price = hasRealtimePrice ? Number(quote.price)
+    : isPositiveNumber(quote.close) ? Number(quote.close)
+      : null;
+  const priceDate = normalizeDate(hasRealtimePrice
+    ? (quote.quoteDate || quote.date)
+    : (quote.closeDate || quote.quoteDate || quote.date));
+  if (price === null || !priceDate || priceDate > asOfDate) return null;
+
+  if (priceDate < asOfDate) {
+    return { price, priceDate, source: 'last-close', isStale: true };
   }
 
-  if (isPositiveNumber(quote.price)) {
-    return {
-      price: Number(quote.price),
-      priceDate: normalizeDate(quote.quoteDate || quote.date),
-      source: quote.source === 'close' || quote.isClose === true ? 'close' : 'realtime',
-      isStale: false
-    };
-  }
-
-  return null;
+  return {
+    price,
+    priceDate,
+    source: !hasRealtimePrice || quote.source === 'close' || quote.isClose === true ? 'close' : 'realtime',
+    isStale: false
+  };
 };
 
 const getFallbackPrice = (holding, fallbackPrices) => {
   const fallback = fallbackPrices?.[holding.symbol];
   const candidates = [
-    {
-      price: holding.lastPrice,
-      priceDate: holding.lastPriceDate || holding.lastPriceAt
-    },
+    // lastPriceAt is a cache write timestamp, not a market close date. Never derive a business date from it.
+    { price: holding.lastPrice, priceDate: holding.lastPriceDate },
     typeof fallback === 'number'
       ? { price: fallback, priceDate: null }
       : { price: fallback?.price, priceDate: fallback?.date || fallback?.priceDate }
   ]
-    .filter((candidate) => isPositiveNumber(candidate.price))
+    .filter((candidate) => isPositiveNumber(candidate.price) && normalizeDate(candidate.priceDate))
     .map((candidate) => ({
       price: Number(candidate.price),
       priceDate: normalizeDate(candidate.priceDate),
@@ -61,12 +55,9 @@ const getFallbackPrice = (holding, fallbackPrices) => {
 
   if (candidates.length === 0) return null;
 
-  return candidates.reduce((latest, candidate) => {
-    if (!latest.priceDate || (candidate.priceDate && candidate.priceDate > latest.priceDate)) {
-      return candidate;
-    }
-    return latest;
-  });
+  return candidates.reduce((latest, candidate) => (
+    candidate.priceDate > latest.priceDate ? candidate : latest
+  ));
 };
 
 const getRate = (rates, currency) => {
@@ -76,7 +67,15 @@ const getRate = (rates, currency) => {
   return rate;
 };
 
-const valuatePortfolio = ({ cashBalances = {}, holdings = [], quotes = {}, rates = {}, fallbackPrices = {} } = {}) => {
+const valuatePortfolio = ({
+  cashBalances = {},
+  holdings = [],
+  quotes = {},
+  rates = {},
+  fallbackPrices = {},
+  asOfDate = getDateStringInOffset(BEIJING_OFFSET_MINUTES)
+} = {}) => {
+  const valuationDate = normalizeDate(asOfDate) || getDateStringInOffset(BEIJING_OFFSET_MINUTES);
   const cashByCurrency = normalizeCashBalances(cashBalances instanceof Map
     ? Object.fromEntries(cashBalances)
     : cashBalances);
@@ -96,18 +95,12 @@ const valuatePortfolio = ({ cashBalances = {}, holdings = [], quotes = {}, rates
   });
 
   const valuations = holdings.map((holding) => {
-    const quotePrice = getQuotePrice(findQuote(quotes, holding.symbol));
+    const quotePrice = getQuotePrice(findQuote(quotes, holding.symbol), valuationDate);
     const valuation = quotePrice || getFallbackPrice(holding, fallbackPrices);
 
     if (!valuation) {
       hasMissingData = true;
-      return {
-        symbol: holding.symbol,
-        price: null,
-        priceDate: null,
-        source: 'missing',
-        isStale: false
-      };
+      return { symbol: holding.symbol, price: null, priceDate: null, source: 'missing', isStale: false };
     }
 
     if (valuation.isStale) hasStalePrice = true;

@@ -2,12 +2,11 @@ const mongoose = require('mongoose');
 const { Trade, Holding } = require('../models/Trade');
 const { Asset } = require('../models/Asset');
 const User = require('../models/User');
-const Transfer = require('../models/Transfer');
 const { getRates } = require('../utils/currency');
 const { getQuotes, buildTradeMarketSnapshot, normalizeMarketOverviewSnapshot, inferSnapshotStatus } = require('../utils/marketData');
+const { refreshAssetMarketValue } = require('../utils/assetSnapshot');
 const { BEIJING_OFFSET_MINUTES, getDayRangeInOffset, parseDateInOffset } = require('../utils/datetime');
-const { buildLedger } = require('../utils/ledger');
-const { sumCashBalancesCNY, toMoney } = require('../utils/money');
+const { toMoney } = require('../utils/money');
 const { getCurrencyForMarket } = require('../utils/marketCurrency');
 const { round2, calculateDailyProfitFromPosition } = require('../utils/pnl');
 const { normalizeSymbol, buildSymbolAliases } = require('../utils/symbol');
@@ -128,20 +127,13 @@ const validateTradeEditQuantity = async ({ userId, editedTradeId, updates }) => 
 };
 
 const rebuildAssetFromLedger = async (userId) => {
-  const [rates, transfers, tradesAsc, existingHoldings] = await Promise.all([
-    getRates(),
-    Transfer.find({ userId }),
+  const [tradesAsc, existingHoldings] = await Promise.all([
     Trade.find({ userId }).sort({ date: 1, _id: 1 }),
     Holding.find({ userId })
   ]);
 
-  const ledger = buildLedger({ transfers, trades: tradesAsc });
-  const cashCNY = sumCashBalancesCNY(ledger.cashBalances, rates);
-  const principalCNY = ledger.principalCNY;
-
   const existingBySymbol = new Map(existingHoldings.map(h => [normalizeSymbol(h.symbol), h]));
-  const performanceBySymbol = calculateDilutedPerformance({ trades: tradesAsc, rates });
-
+  const performanceBySymbol = calculateDilutedPerformance({ trades: tradesAsc, rates: await getRates() });
   const targetBySymbol = new Map();
   performanceBySymbol.forEach((perf) => {
     if (perf.quantity <= 0) return;
@@ -154,100 +146,48 @@ const rebuildAssetFromLedger = async (userId) => {
       avgCost: round2(perf.avgCost),
       lastPrice: old?.lastPrice ?? null,
       lastPriceAt: old?.lastPriceAt ?? null,
+      lastPriceDate: old?.lastPriceDate ?? null,
       currency: perf.currency || old?.currency || 'CNY',
       marketTag: old?.marketTag || null
     });
   });
 
-  // 增量更新：存在的 update，新增的 insert，清仓的 delete
   const bulkOps = [];
   existingBySymbol.forEach((old, symbol) => {
-    if (!targetBySymbol.has(symbol)) {
-      bulkOps.push({ deleteOne: { filter: { _id: old._id } } });
-    }
+    if (!targetBySymbol.has(symbol)) bulkOps.push({ deleteOne: { filter: { _id: old._id } } });
   });
   targetBySymbol.forEach((target, symbol) => {
     const old = existingBySymbol.get(symbol);
-    if (old) {
-      const changed =
-        old.quantity !== target.quantity ||
-        old.avgCost !== target.avgCost ||
-        old.currency !== target.currency ||
-        old.name !== target.name ||
-        old.marketTag !== target.marketTag;
-      if (changed) {
-        bulkOps.push({
-          updateOne: {
-            filter: { _id: old._id },
-            update: {
-              $set: {
-                quantity: target.quantity,
-                avgCost: target.avgCost,
-                currency: target.currency,
-                name: target.name,
-                marketTag: target.marketTag
-              }
-            }
-          }
-        });
-      }
-    } else {
+    if (!old) {
       bulkOps.push({ insertOne: { document: target } });
+      return;
     }
-  });
-
-  if (bulkOps.length > 0) {
-    await Holding.bulkWrite(bulkOps, { ordered: false });
-  }
-
-  const holdings = await Holding.find({ userId });
-
-  const symbols = holdings.map(h => h.symbol);
-  const quotes = await getQuotes(symbols);
-
-  const priceUpdates = [];
-  let holdingsMarketValue = 0;
-  holdings.forEach(h => {
-    let currentPrice = null;
-    const quote = quotes[h.symbol] || Object.values(quotes).find(q => q.symbol === h.symbol);
-
-    const closePrice = quote?.preClose && quote.preClose > 0 ? quote.preClose : null;
-    if (closePrice !== null && h.lastPrice !== closePrice) {
-      priceUpdates.push({
+    const changed = old.quantity !== target.quantity
+      || old.avgCost !== target.avgCost
+      || old.currency !== target.currency
+      || old.name !== target.name
+      || old.marketTag !== target.marketTag;
+    if (changed) {
+      bulkOps.push({
         updateOne: {
-          filter: { _id: h._id },
-          update: { $set: { lastPrice: closePrice, lastPriceAt: new Date() } }
+          filter: { _id: old._id },
+          update: { $set: {
+            quantity: target.quantity,
+            avgCost: target.avgCost,
+            currency: target.currency,
+            name: target.name,
+            marketTag: target.marketTag
+          } }
         }
       });
     }
-
-    if (quote && quote.price > 0) {
-      currentPrice = quote.price;
-    } else if (h.lastPrice && h.lastPrice > 0) {
-      currentPrice = h.lastPrice;
-    }
-
-    const marketValue = currentPrice !== null ? h.quantity * currentPrice : 0;
-    const rate = rates[h.currency] || 1;
-    holdingsMarketValue += marketValue * rate;
   });
 
-  if (priceUpdates.length > 0) {
-    await Holding.bulkWrite(priceUpdates, { ordered: false });
-  }
+  if (bulkOps.length > 0) await Holding.bulkWrite(bulkOps, { ordered: false });
 
-  let asset = await Asset.findOne({ userId });
-  if (!asset) asset = new Asset({ userId });
-
-  asset.cashBalances = ledger.cashBalances;
-  asset.cash = cashCNY;
-  asset.currentPrincipal = principalCNY;
-  asset.holdingsMarketValue = round2(holdingsMarketValue);
-  asset.totalAssets = round2(asset.cash + asset.holdingsMarketValue);
-  asset.totalHoldingsCount = holdings.length;
-  await asset.save();
+  // All asset values and cached close prices are written through the sole valuation entry point.
+  await refreshAssetMarketValue(userId);
 };
-
 const buildTradePerformanceBySymbol = ({ trades, rates }) => {
   return calculateDilutedPerformance({ trades, rates });
 };
@@ -321,7 +261,6 @@ exports.getHoldings = async (req, res) => {
       });
     });
 
-    const priceUpdates = [];
 
     const items = holdings.map(h => {
       let currentPrice;
@@ -330,15 +269,6 @@ exports.getHoldings = async (req, res) => {
       let dailyProfit = null;
 
       const quote = quoteMap.get(h.symbol);
-      const closePrice = quote?.preClose && quote.preClose > 0 ? quote.preClose : null;
-      if (closePrice !== null && h.lastPrice !== closePrice) {
-        priceUpdates.push({
-          updateOne: {
-            filter: { _id: h._id },
-            update: { $set: { lastPrice: closePrice, lastPriceAt: new Date() } }
-          }
-        });
-      }
 
       if (quote && quote.price > 0) {
         currentPrice = quote.price;
@@ -354,7 +284,7 @@ exports.getHoldings = async (req, res) => {
           });
         }
       } else {
-        currentPrice = closePrice !== null ? closePrice : (h.lastPrice && h.lastPrice > 0 ? h.lastPrice : null);
+        currentPrice = h.lastPrice && h.lastPrice > 0 ? h.lastPrice : null;
       }
 
       if (currentPrice !== null && h.avgCost > 0) {
@@ -400,9 +330,6 @@ exports.getHoldings = async (req, res) => {
       };
     });
 
-    if (priceUpdates.length > 0) {
-      await Holding.bulkWrite(priceUpdates, { ordered: false });
-    }
 
     const holdingsMarketValueCNY = items.reduce((sum, it) => sum + (it.marketValueCNY || 0), 0);
     const totalAssetsCNY = cashCNY + holdingsMarketValueCNY;

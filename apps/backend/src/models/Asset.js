@@ -12,7 +12,6 @@ const assetSchema = new mongoose.Schema({
     default: () => ({ CNY: 0, HKD: 0, USD: 0 })
   },
   holdingsMarketValue: { type: Number, default: 0 },
-  valuationQuality: { type: String, enum: ['complete', 'partial', 'stale'], default: 'complete' },
   currentPrincipal: { type: Number, default: 0 },
   totalHoldingsCount: { type: Number, default: 0 },
   valuationQuality: { type: String, enum: ['complete', 'stale', 'partial'], default: 'partial' }

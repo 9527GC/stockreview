@@ -13,7 +13,7 @@ const findQuote = (quotes, symbol) => quotes[symbol]
 const buildFallbackPrices = (holdings) => holdings.reduce((prices, holding) => {
   prices[holding.symbol] = {
     price: holding.lastPrice,
-    date: holding.lastPriceDate || holding.lastPriceAt || null
+    date: holding.lastPriceDate || null
   };
   return prices;
 }, {});
