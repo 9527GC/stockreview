@@ -5,8 +5,10 @@ const User = require('../models/User');
 const Transfer = require('../models/Transfer');
 const { getRates } = require('../utils/currency');
 const { getQuotes, buildTradeMarketSnapshot, normalizeMarketOverviewSnapshot, inferSnapshotStatus } = require('../utils/marketData');
-const { getDayRangeInOffset, parseDateInOffset } = require('../utils/datetime');
-const { calculateCashAndPrincipalCNY } = require('../utils/ledger');
+const { BEIJING_OFFSET_MINUTES, getDayRangeInOffset, parseDateInOffset } = require('../utils/datetime');
+const { buildLedger } = require('../utils/ledger');
+const { sumCashBalancesCNY, toMoney } = require('../utils/money');
+const { getCurrencyForMarket } = require('../utils/marketCurrency');
 const { round2, calculateDailyProfitFromPosition } = require('../utils/pnl');
 const { normalizeSymbol, buildSymbolAliases } = require('../utils/symbol');
 const { calculateDilutedPerformance, calculateDilutedProfits, calculatePositionZeroGroups } = require('../utils/cost');
@@ -133,7 +135,9 @@ const rebuildAssetFromLedger = async (userId) => {
     Holding.find({ userId })
   ]);
 
-  const { cashCNY, principalCNY } = calculateCashAndPrincipalCNY({ transfers, trades: tradesAsc, rates });
+  const ledger = buildLedger({ transfers, trades: tradesAsc });
+  const cashCNY = sumCashBalancesCNY(ledger.cashBalances, rates);
+  const principalCNY = ledger.principalCNY;
 
   const existingBySymbol = new Map(existingHoldings.map(h => [normalizeSymbol(h.symbol), h]));
   const performanceBySymbol = calculateDilutedPerformance({ trades: tradesAsc, rates });
@@ -235,6 +239,7 @@ const rebuildAssetFromLedger = async (userId) => {
   let asset = await Asset.findOne({ userId });
   if (!asset) asset = new Asset({ userId });
 
+  asset.cashBalances = ledger.cashBalances;
   asset.cash = cashCNY;
   asset.currentPrincipal = principalCNY;
   asset.holdingsMarketValue = round2(holdingsMarketValue);
@@ -881,7 +886,11 @@ exports.addTrade = async (req, res) => {
     }
 
     // 根据 symbol/market 推断币种，避免港股/美股误存为 CNY
-    currency = inferCurrencyFromSymbol(symbol, market, currency);
+    const derivedCurrency = getCurrencyForMarket({ symbol, market });
+    if (currency && String(currency).trim().toUpperCase() !== derivedCurrency) {
+      return res.status(400).json({ message: 'Requested currency conflicts with the instrument market' });
+    }
+    currency = derivedCurrency;
     mood = mood ? String(mood).trim().toUpperCase() : 'NEUTRAL';
     news = news === undefined ? null : sanitizeHtml(news);
     if (marketOverview !== undefined && marketOverview !== null && typeof marketOverview !== 'object') {
@@ -940,6 +949,12 @@ exports.addTrade = async (req, res) => {
       }
     }
 
+    const rates = await getRates();
+    const fxRateToCNY = Number(rates[currency]);
+    if (!Number.isFinite(fxRateToCNY) || fxRateToCNY <= 0) return res.status(400).json({ message: 'Invalid exchange rate for ' + currency });
+    const grossAmount = toMoney(price * quantity);
+    const netSettlementAmount = toMoney(type === 'BUY' ? grossAmount + commission : grossAmount - commission);
+
     // 创建交易记录
     const trade = new Trade({
       userId: req.user._id,
@@ -954,7 +969,10 @@ exports.addTrade = async (req, res) => {
       feeMode,
       feeRate: feeMode === 'rate' ? feeRate : null,
       feeAmount: feeMode === 'amount' ? (Number(feeAmount) || 0) : null,
-      currency: currency || 'CNY',
+      currency,
+      fxRateToCNY: toMoney(fxRateToCNY),
+      grossAmount,
+      netSettlementAmount,
       market: tradeMarket,
       mood,
       marketOverview: snapshotFields.marketOverview,
@@ -974,7 +992,7 @@ exports.addTrade = async (req, res) => {
     await upsertTodayDailyProfit(req.user._id);
 
     // 标记脏数据：从交易日期开始由后台异步重新计算
-    const tradeDateStr = trade.date.toISOString().slice(0, 10);
+    const tradeDateStr = getDateStringInOffset(BEIJING_OFFSET_MINUTES, trade.date);
     await scheduleRecalc(req.user._id, tradeDateStr);
 
     // 更新用户手续费偏好（按市场记录最近一次的 mode 和数值）
@@ -1117,7 +1135,19 @@ exports.updateTrade = async (req, res) => {
       }
     }
 
-    // 7. 应用更新并保存
+    // 7. Economic corrections relock settlement values at correction-time FX.
+    if (hasCommissionRelatedChange) {
+      const rates = await getRates();
+      const fxRateToCNY = Number(rates[trade.currency]);
+      if (!Number.isFinite(fxRateToCNY) || fxRateToCNY <= 0) return res.status(400).json({ message: 'Invalid exchange rate for ' + trade.currency });
+      const grossAmount = toMoney((updates.price ?? trade.price) * (updates.quantity ?? trade.quantity));
+      const commissionAmount = Number(updates.commission ?? trade.commission);
+      updates.fxRateToCNY = toMoney(fxRateToCNY);
+      updates.grossAmount = grossAmount;
+      updates.netSettlementAmount = toMoney(trade.type === 'BUY' ? grossAmount + commissionAmount : grossAmount - commissionAmount);
+    }
+
+    // 8. 应用更新并保存
     Object.assign(trade, updates);
     if (!trade.mood) trade.mood = 'NEUTRAL';
     await trade.save();
@@ -1126,7 +1156,7 @@ exports.updateTrade = async (req, res) => {
     await rebuildAssetFromLedger(req.user._id);
     await upsertTodayDailyProfit(req.user._id);
 
-    const tradeDateStr = trade.date.toISOString().slice(0, 10);
+    const tradeDateStr = getDateStringInOffset(BEIJING_OFFSET_MINUTES, trade.date);
     await scheduleRecalc(req.user._id, tradeDateStr);
 
     res.json(trade);
@@ -1206,7 +1236,7 @@ exports.deleteTradeById = async (req, res) => {
     await upsertTodayDailyProfit(req.user._id);
 
     // 标记脏数据：从交易日期开始由后台异步重新计算
-    const tradeDateStr = trade.date.toISOString().slice(0, 10);
+    const tradeDateStr = getDateStringInOffset(BEIJING_OFFSET_MINUTES, trade.date);
     await scheduleRecalc(req.user._id, tradeDateStr);
 
     res.json({ message: 'Trade deleted successfully', id });

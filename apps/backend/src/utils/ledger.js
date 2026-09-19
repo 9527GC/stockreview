@@ -1,15 +1,15 @@
 const { BEIJING_OFFSET_MINUTES, getDateStringInOffset } = require('./datetime');
-const { normalizeCashBalances, sumCashBalancesCNY, toMoney } = require('./money');
+const { normalizeCashBalances, sumCashBalancesCNY, toCNY, toMoney } = require('./money');
 
 const CASH_CURRENCIES = ['CNY', 'HKD', 'USD'];
 
-const readLockedNumber = (record, recordType, field, { positive = false } = {}) => {
+const readLockedNumber = (record, recordType, field, { positive = false, nonNegative = false } = {}) => {
   if (record?.[field] === null || record?.[field] === undefined) {
     throw new Error(`${recordType} is missing locked ${field}`);
   }
 
   const value = Number(record[field]);
-  if (!Number.isFinite(value) || (positive && value <= 0)) {
+  if (!Number.isFinite(value) || (positive && value <= 0) || (nonNegative && value < 0)) {
     throw new Error(`${recordType} has invalid locked ${field}`);
   }
   return toMoney(value);
@@ -42,9 +42,12 @@ const buildLedger = ({ transfers = [], trades = [] } = {}) => {
 
   transfers.forEach((transfer) => {
     const currency = readCurrency(transfer, 'Transfer');
-    readLockedNumber(transfer, 'Transfer', 'fxRateToCNY', { positive: true });
+    const fxRateToCNY = readLockedNumber(transfer, 'Transfer', 'fxRateToCNY', { positive: true });
     const amountCNY = readLockedNumber(transfer, 'Transfer', 'amountCNY', { positive: true });
     const amount = readLockedNumber(transfer, 'Transfer', 'amount', { positive: true });
+    if (amountCNY !== toCNY(amount, fxRateToCNY)) {
+      throw new Error('Transfer has incoherent locked amountCNY');
+    }
     const occurredAt = readOccurredAt(transfer);
     const sign = transfer.type === 'IN' ? 1 : transfer.type === 'OUT' ? -1 : null;
 
@@ -67,7 +70,7 @@ const buildLedger = ({ transfers = [], trades = [] } = {}) => {
     const currency = readCurrency(trade, 'Trade');
     readLockedNumber(trade, 'Trade', 'fxRateToCNY', { positive: true });
     readLockedNumber(trade, 'Trade', 'grossAmount', { positive: true });
-    const netSettlementAmount = readLockedNumber(trade, 'Trade', 'netSettlementAmount');
+    const netSettlementAmount = readLockedNumber(trade, 'Trade', 'netSettlementAmount', { nonNegative: true });
     const sign = trade.type === 'BUY' ? -1 : trade.type === 'SELL' ? 1 : null;
 
     if (sign === null) {

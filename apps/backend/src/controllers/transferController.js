@@ -1,103 +1,82 @@
 const Transfer = require('../models/Transfer');
-
+const { Trade } = require('../models/Trade');
 const { Asset } = require('../models/Asset');
 const { getRates } = require('../utils/currency');
-const { parseDateInOffset } = require('../utils/datetime');
+const { BEIJING_OFFSET_MINUTES, parseDateInOffset } = require('../utils/datetime');
+const { buildLedger } = require('../utils/ledger');
+const { sumCashBalancesCNY, toMoney, toCNY } = require('../utils/money');
 const { upsertTodayDailyProfit } = require('../utils/dailyProfitBackfill');
+
+const SUPPORTED_CURRENCIES = new Set(['CNY', 'HKD', 'USD']);
+
+const rebuildCashAssetFromLedger = async (userId, rates) => {
+  const [transfers, trades] = await Promise.all([
+    Transfer.find({ userId }).sort({ date: 1, _id: 1 }),
+    Trade.find({ userId }).sort({ date: 1, _id: 1 })
+  ]);
+  const ledger = buildLedger({ transfers, trades });
+  const cash = sumCashBalancesCNY(ledger.cashBalances, rates);
+  let asset = await Asset.findOne({ userId });
+  if (!asset) asset = new Asset({ userId });
+  asset.cashBalances = ledger.cashBalances;
+  asset.cash = cash;
+  asset.currentPrincipal = ledger.principalCNY;
+  asset.totalAssets = toMoney(cash + Number(asset.holdingsMarketValue || 0));
+  await asset.save();
+  return asset;
+};
 
 exports.getTransfers = async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize) || 20));
     const query = { userId: req.user._id };
-
     const [transfers, total] = await Promise.all([
-      Transfer.find(query)
-        .sort({ date: -1 })
-        .skip((page - 1) * pageSize)
-        .limit(pageSize),
+      Transfer.find(query).sort({ date: -1 }).skip((page - 1) * pageSize).limit(pageSize),
       Transfer.countDocuments(query)
     ]);
-
     res.json({
       list: transfers.map(t => ({
-        id: t._id,
-        type: t.type,
-        amount: t.amount,
-        currency: t.currency,
-        date: t.date,
-        remark: t.remark
-      })),
-      total
+        id: t._id, type: t.type, amount: t.amount, currency: t.currency,
+        fxRateToCNY: t.fxRateToCNY, amountCNY: t.amountCNY, date: t.date, remark: t.remark
+      })), total
     });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
+  } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 exports.addTransfer = async (req, res) => {
   try {
     let { type, amount, currency, date, remark } = req.body;
-
     type = String(type || '').toUpperCase();
-    if (!['IN', 'OUT'].includes(type)) {
-      return res.status(400).json({ message: 'Type must be IN or OUT' });
-    }
-
+    if (!['IN', 'OUT'].includes(type)) return res.status(400).json({ message: 'Type must be IN or OUT' });
     amount = Number(amount);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      return res.status(400).json({ message: 'Amount must be a positive number' });
+    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ message: 'Amount must be a positive number' });
+    date = parseDateInOffset(date || new Date(), BEIJING_OFFSET_MINUTES);
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return res.status(400).json({ message: 'Invalid date' });
+    currency = String(currency || 'CNY').trim().toUpperCase();
+    if (!SUPPORTED_CURRENCIES.has(currency)) return res.status(400).json({ message: `Unsupported currency: ${currency}` });
+
+    const rates = await getRates();
+    const fxRateToCNY = Number(rates[currency]);
+    if (!Number.isFinite(fxRateToCNY) || fxRateToCNY <= 0) return res.status(400).json({ message: `Invalid exchange rate for ${currency}` });
+
+    if (type === 'OUT') {
+      const [existingTransfers, trades] = await Promise.all([
+        Transfer.find({ userId: req.user._id }).sort({ date: 1, _id: 1 }),
+        Trade.find({ userId: req.user._id }).sort({ date: 1, _id: 1 })
+      ]);
+      const available = buildLedger({ transfers: existingTransfers, trades }).cashBalances[currency];
+      if (amount > available) return res.status(400).json({ message: 'Insufficient cash' });
     }
 
-    date = parseDateInOffset(date || new Date(), 480);
-    if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
-      return res.status(400).json({ message: 'Invalid date' });
-    }
-
-    currency = currency || 'CNY';
-    const RATES = await getRates();
-    const rate = RATES[currency] || 1;
-    const amountInCNY = amount * rate;
-
-    // 原子化更新资产：IN 直接增加，OUT 使用 $gte 条件防止透支
-    if (type === 'IN') {
-      await Asset.findOneAndUpdate(
-        { userId: req.user._id },
-        { $inc: { cash: amountInCNY, currentPrincipal: amountInCNY } },
-        { upsert: true, new: true }
-      );
-    } else {
-      const updated = await Asset.findOneAndUpdate(
-        { userId: req.user._id, cash: { $gte: amountInCNY } },
-        { $inc: { cash: -amountInCNY, currentPrincipal: -amountInCNY } },
-        { new: true }
-      );
-      if (!updated) {
-        return res.status(400).json({ message: 'Insufficient cash' });
-      }
-    }
-
-    const transfer = new Transfer({
-      userId: req.user._id,
-      type,
-      amount,
-      currency,
-      date,
-      remark
+    const transfer = await Transfer.create({
+      userId: req.user._id, type, amount: toMoney(amount), currency, date, remark,
+      fxRateToCNY: toMoney(fxRateToCNY), amountCNY: toCNY(amount, fxRateToCNY)
     });
-    await transfer.save();
-
-    // 重新计算总资产（现金 + 持仓市值），保持 totalAssets 同步
-    const asset = await Asset.findOne({ userId: req.user._id });
-    if (asset) {
-      asset.totalAssets = (asset.cash || 0) + (asset.holdingsMarketValue || 0);
-      await asset.save();
-    }
-
+    await rebuildCashAssetFromLedger(req.user._id, rates);
     await upsertTodayDailyProfit(req.user._id);
-
     res.status(201).json(transfer);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
+  } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
+exports.rebuildCashAssetFromLedger = rebuildCashAssetFromLedger;

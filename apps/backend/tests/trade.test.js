@@ -8,6 +8,7 @@ const app = require('../src/index');
 const User = require('../src/models/User');
 const { Trade, Holding } = require('../src/models/Trade');
 const { Asset } = require('../src/models/Asset');
+const { getRates } = require('../src/utils/currency');
 
 let token;
 let userId;
@@ -22,6 +23,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  getRates.mockResolvedValue({ CNY: 1, USD: 7.2, HKD: 0.92 });
   await Trade.deleteMany({ userId });
   await Holding.deleteMany({ userId });
   await Asset.deleteMany({ userId });
@@ -81,6 +83,100 @@ describe('Trade API', () => {
     expect(res.body.cognitiveBias).toBe('过早确认');
   });
 
+  test('拒绝请求币种与标的市场币种冲突的交易', async () => {
+    const res = await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '00700.HK',
+        currency: 'USD',
+        type: 'BUY',
+        price: 100,
+        quantity: 1,
+        commission: 0,
+        date: '2026-06-27T09:30:00+08:00',
+        name: '腾讯控股'
+      });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body.message).toMatch(/currency/i);
+  });
+
+  test('外币交易持久化锁定汇率和清算金额，并由账本重建分币种现金', async () => {
+    const res = await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: 'AAPL.US',
+        type: 'BUY',
+        price: 10,
+        quantity: 3,
+        commission: 1,
+        date: '2026-06-27T09:30:00+08:00',
+        name: 'Apple'
+      });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.body).toMatchObject({
+      currency: 'USD',
+      fxRateToCNY: 7.2,
+      grossAmount: 30,
+      netSettlementAmount: 31
+    });
+
+    const [trade, asset] = await Promise.all([
+      Trade.findById(res.body._id),
+      Asset.findOne({ userId })
+    ]);
+    expect(trade.toObject()).toMatchObject({
+      currency: 'USD',
+      fxRateToCNY: 7.2,
+      grossAmount: 30,
+      netSettlementAmount: 31
+    });
+    expect(asset.cashBalances.get('USD')).toBe(-31);
+    expect(asset.cash).toBe(-223.2);
+  });
+
+  test('复盘字段编辑保留锁定金额，经济字段更正使用更正时汇率同步重算', async () => {
+    const created = await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: 'AAPL.US',
+        type: 'BUY',
+        price: 10,
+        quantity: 2,
+        commission: 1,
+        date: '2026-06-27T09:30:00+08:00',
+        name: 'Apple'
+      });
+
+    const reviewOnly = await request(app)
+      .put(`/api/trades/${created.body._id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ logic: '仅补充复盘结论' });
+
+    expect(reviewOnly.statusCode).toBe(200);
+    expect(reviewOnly.body).toMatchObject({
+      fxRateToCNY: 7.2,
+      grossAmount: 20,
+      netSettlementAmount: 21
+    });
+
+    getRates.mockResolvedValue({ CNY: 1, USD: 7.3, HKD: 0.92 });
+    const corrected = await request(app)
+      .put(`/api/trades/${created.body._id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ price: 12, commission: 2 });
+
+    expect(corrected.statusCode).toBe(200);
+    expect(corrected.body).toMatchObject({
+      fxRateToCNY: 7.3,
+      grossAmount: 24,
+      netSettlementAmount: 26
+    });
+  });
   test('should update a trade without crashing (currency inference after fetch)', async () => {
     const created = await request(app)
       .post('/api/trades')

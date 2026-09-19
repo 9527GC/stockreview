@@ -159,3 +159,37 @@ describe('buildLedger', () => {
     expect(() => buildLedger(input)).toThrow(expectedError);
   });
 });
+describe('locked ledger regression protection', () => {
+  test('Mongoose 文档缺少锁定字段时不允许默认伪造数据，并被账本拒绝', () => {
+    const transfer = new Transfer({
+      userId: '507f1f77bcf86cd799439011',
+      type: 'IN',
+      amount: 100,
+      currency: 'USD',
+      date: new Date('2026-09-19T01:00:00.000Z')
+    });
+    const trade = new Trade({
+      userId: '507f1f77bcf86cd799439011',
+      symbol: 'AAPL.US',
+      name: 'Apple',
+      type: 'BUY',
+      price: 30,
+      quantity: 1,
+      commission: 1,
+      date: new Date('2026-09-19T02:00:00.000Z'),
+      currency: 'USD'
+    });
+
+    expect(transfer.validateSync()?.errors).toMatchObject({
+      fxRateToCNY: expect.anything(),
+      amountCNY: expect.anything()
+    });
+    expect(trade.validateSync()?.errors).toMatchObject({
+      fxRateToCNY: expect.anything(),
+      grossAmount: expect.anything(),
+      netSettlementAmount: expect.anything()
+    });
+    expect(() => buildLedger({ transfers: [transfer], trades: [trade] }))
+      .toThrow(/Transfer.*fxRateToCNY/i);
+  });
+});

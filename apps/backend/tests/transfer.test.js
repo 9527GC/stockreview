@@ -1,5 +1,9 @@
 const request = require('supertest');
 
+jest.mock('../src/utils/currency', () => ({
+  getRates: jest.fn(() => Promise.resolve({ CNY: 1, USD: 7.2, HKD: 0.92 }))
+}));
+
 const app = require('../src/index');
 const User = require('../src/models/User');
 const { Asset } = require('../src/models/Asset');
@@ -46,6 +50,45 @@ describe('Transfer API', () => {
       .post('/api/transfers')
       .set('Authorization', `Bearer ${token}`)
       .send({ type: 'OUT', amount: 10000 });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.message).toContain('Insufficient cash');
+  });
+
+  test('外币入金锁定实际人民币金额，并由账本持久化原始币种现金', async () => {
+    const res = await request(app)
+      .post('/api/transfers')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ type: 'IN', amount: 100, currency: 'USD', date: '2026-09-19 09:00:00' });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.body.fxRateToCNY).toBe(7.2);
+    expect(res.body.amountCNY).toBe(720);
+
+    const [transfer, asset] = await Promise.all([
+      Transfer.findOne({ userId }),
+      Asset.findOne({ userId })
+    ]);
+    expect(transfer.toObject()).toMatchObject({
+      currency: 'USD',
+      fxRateToCNY: 7.2,
+      amountCNY: 720
+    });
+    expect(asset.cashBalances.get('USD')).toBe(100);
+    expect(asset.cash).toBe(720);
+    expect(asset.currentPrincipal).toBe(720);
+  });
+
+  test('OUT 必须检查原始币种现金余额，而不是人民币估值余额', async () => {
+    await request(app)
+      .post('/api/transfers')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ type: 'IN', amount: 1000, currency: 'CNY' });
+
+    const res = await request(app)
+      .post('/api/transfers')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ type: 'OUT', amount: 100, currency: 'USD' });
+
     expect(res.statusCode).toBe(400);
     expect(res.body.message).toContain('Insufficient cash');
   });
