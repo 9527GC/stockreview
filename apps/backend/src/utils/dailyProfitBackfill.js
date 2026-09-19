@@ -5,31 +5,26 @@ const { Trade } = require('../models/Trade');
 const Transfer = require('../models/Transfer');
 const { getRates } = require('./currency');
 const { getQuotesForRange } = require('./historicalQuoteCache');
-const { calculateCashAndPrincipalCNY } = require('./ledger');
 const { round2 } = require('./pnl');
 const { normalizeSymbol } = require('./symbol');
-const { parseDateInOffset } = require('./datetime');
-const { getDateStringInOffset } = require('./dailyProfit');
+const { getDateStringInOffset, getDayRangeInOffset, getPreviousDateStringInOffset, parseDateInOffset } = require('./datetime');
+const { calculateModifiedDietzReturn } = require('./dailyPerformance');
 
 const DEFAULT_OFFSET_MINUTES = 480; // Beijing Time
 
-const getDatesBetween = (startDateStr, endDateStr) => {
+const getDatesBetween = (startDateStr, endDateStr, offsetMinutes = DEFAULT_OFFSET_MINUTES) => {
   const dates = [];
-  const start = new Date(startDateStr);
-  const end = new Date(endDateStr);
-
-  for (let d = new Date(start); d <= end; d = new Date(d.getTime() + 24 * 60 * 60 * 1000)) {
-    dates.push(d.toISOString().slice(0, 10));
+  let cursor = parseDateInOffset(`${startDateStr} 00:00:00`, offsetMinutes);
+  const end = parseDateInOffset(`${endDateStr} 00:00:00`, offsetMinutes);
+  while (cursor <= end) {
+    dates.push(getDateStringInOffset(offsetMinutes, cursor));
+    cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000);
   }
-
   return dates;
 };
 
-const getPreviousDateStr = (dateStr) => {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() - 1);
-  return d.toISOString().slice(0, 10);
-};
+const getPreviousDateStr = (dateStr, offsetMinutes = DEFAULT_OFFSET_MINUTES) =>
+  getPreviousDateStringInOffset(offsetMinutes, parseDateInOffset(`${dateStr} 00:00:00`, offsetMinutes));
 
 const applyTradeToHoldings = (holdings, trade) => {
   const symbol = normalizeSymbol(trade.symbol);
@@ -96,16 +91,18 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
   const currentHoldings = new Map();
   let cashCNY = 0;
   let principalCNY = 0;
+  let prevCumulativeReturn = 0;
   let prevTotalAssets = null;
   let tradeIndex = 0;
   let recomputeStartDate = startDateStr;
 
   // 尝试使用 startDateStr 前一天的缓存作为起点，实现增量回填
-  const prevDateStr = getPreviousDateStr(startDateStr);
+  const prevDateStr = getPreviousDateStr(startDateStr, offsetMinutes);
   const prevRecord = await DailyProfit.findOne({ userId, date: prevDateStr }).lean();
 
   if (prevRecord) {
     prevTotalAssets = Number.isFinite(prevRecord.totalAssets) ? Number(prevRecord.totalAssets) : null;
+    prevCumulativeReturn = Number.isFinite(prevRecord.cumulativeReturn) ? Number(prevRecord.cumulativeReturn) : 0;
 
     // 应用截止到前一天的所有交易
     while (tradeIndex < tradesAsc.length && dateStrOf(tradesAsc[tradeIndex].date) <= prevDateStr) {
@@ -113,16 +110,17 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
       tradeIndex++;
     }
 
-    // 截止到前一天的现金与本金
-    const upToPrevTransfers = transfers.filter(t => dateStrOf(t.date) <= prevDateStr);
-    const upToPrevTrades = tradesAsc.slice(0, tradeIndex);
-    const ledger = calculateCashAndPrincipalCNY({
-      transfers: upToPrevTransfers,
-      trades: upToPrevTrades,
-      rates
-    });
-    cashCNY = ledger.cashCNY;
-    principalCNY = ledger.principalCNY;
+    // 交易和转账的历史人民币金额必须来自其写入时锁定的字段，不能用当前汇率回算。
+    for (const transfer of transfers.filter(t => dateStrOf(t.date) <= prevDateStr)) {
+      const signedAmountCNY = (transfer.type === 'IN' ? 1 : -1) * Number(transfer.amountCNY);
+      cashCNY += signedAmountCNY;
+      principalCNY += signedAmountCNY;
+    }
+    for (const trade of tradesAsc.slice(0, tradeIndex)) {
+      const signedSettlementCNY = (trade.type === 'BUY' ? -1 : 1)
+        * Number(trade.netSettlementAmount) * Number(trade.fxRateToCNY);
+      cashCNY += signedSettlementCNY;
+    }
   } else {
     // 无前一天缓存，回退到全量回填
     const firstTradeDate = tradesAsc.length > 0 ? dateStrOf(tradesAsc[0].date) : null;
@@ -133,7 +131,7 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
     }
   }
 
-  const dates = getDatesBetween(recomputeStartDate, todayStr);
+  const dates = getDatesBetween(recomputeStartDate, todayStr, offsetMinutes);
   if (dates.length === 0) {
     return { success: true, updatedCount: 0, skippedCount: 0 };
   }
@@ -171,37 +169,21 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
     for (const trade of dayTrades) {
       applyTradeToHoldings(currentHoldings, trade);
 
-      const currency = trade.currency || 'CNY';
-      const rate = rates[currency] || 1;
-      const tradeAmountCNY = (Number(trade.price) || 0) * (Number(trade.quantity) || 0) * rate;
-      const commissionCNY = (Number(trade.commission) || 0) * rate;
-
-      if (trade.type === 'BUY') {
-        cashCNY -= tradeAmountCNY + commissionCNY;
-      } else if (trade.type === 'SELL') {
-        cashCNY += tradeAmountCNY - commissionCNY;
-      }
+      const settlementCNY = Number(trade.netSettlementAmount) * Number(trade.fxRateToCNY);
+      cashCNY += trade.type === 'BUY' ? -settlementCNY : settlementCNY;
     }
 
     // 应用当天转账并同步更新现金与本金
     const dayTransfers = transfersByDate.get(dateStr) || [];
-    let transferFlow = 0;
-    for (const t of dayTransfers) {
-      const currency = t.currency || 'CNY';
-      const rate = rates[currency] || 1;
-      const amountCNY = (Number(t.amount) || 0) * rate;
+    const transferFlows = dayTransfers.map((transfer) => ({
+      amountCNY: (transfer.type === 'IN' ? 1 : -1) * Number(transfer.amountCNY),
+      occurredAt: transfer.date
+    }));
+    for (const flow of transferFlows) {
+      cashCNY += flow.amountCNY;
+      principalCNY += flow.amountCNY;
 
-      if (t.type === 'IN') {
-        cashCNY += amountCNY;
-        principalCNY += amountCNY;
-        transferFlow += amountCNY;
-      } else if (t.type === 'OUT') {
-        cashCNY -= amountCNY;
-        principalCNY -= amountCNY;
-        transferFlow -= amountCNY;
-      }
     }
-
     const symbolsOnDate = Array.from(currentHoldings.keys());
     let holdingsMarketValue = 0;
     const missingQuoteSymbols = [];
@@ -214,14 +196,11 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
         const quote = quotes[symbol];
         const rate = rates[holding.currency] || 1;
 
-        let price = quote?.close || quote?.preClose || null;
-
-        // 历史行情缺失时，用持仓成本兜底，避免把缺失算成暴跌到 0
-        if (price === null || price <= 0) {
-          price = holding.avgCost || 0;
+        const price = Number(quote?.close);
+        if (!Number.isFinite(price) || price <= 0) {
           missingQuoteSymbols.push(symbol);
+          return;
         }
-
         holdingsMarketValue += (price * holding.quantity) * rate;
       });
     }
@@ -231,20 +210,15 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
     principalCNY = round2(principalCNY);
     const totalAssets = round2(cashCNY + holdingsMarketValue);
 
-    // 今日净资金流入需要从收益中剔除
-    transferFlow = round2(transferFlow);
-    const dailyProfitAmount = prevTotalAssets !== null
-      ? round2(totalAssets - prevTotalAssets - transferFlow)
-      : 0;
-    const dailyReturn = prevTotalAssets !== null && prevTotalAssets > 0
-      ? round2((dailyProfitAmount / prevTotalAssets) * 100)
-      : 0;
-    const cumulativeReturn = principalCNY > 0
-      ? round2(((totalAssets - principalCNY) / principalCNY) * 100)
-      : 0;
+    const { start: dayStart, end: dayEnd } = getDayRangeInOffset(offsetMinutes, parseDateInOffset(`${dateStr} 00:00:00`, offsetMinutes));
+    const performance = prevTotalAssets === null
+      ? { dailyProfitAmount: 0, dailyReturn: 0, externalNetFlow: 0, weightedFlowCNY: 0 }
+      : calculateModifiedDietzReturn({ openingAssetsCNY: prevTotalAssets, closingAssetsCNY: totalAssets, flows: transferFlows, dayStart, dayEnd });
+    const { dailyProfitAmount, dailyReturn, externalNetFlow, weightedFlowCNY } = performance;
+    const cumulativeReturn = round2((((1 + prevCumulativeReturn / 100) * (1 + dailyReturn / 100)) - 1) * 100);
     const cumulativeProfitAmount = round2(totalAssets - principalCNY);
-
-    const source = missingQuoteSymbols.length > 0 ? 'partial' : 'cached';
+    const valuationQuality = missingQuoteSymbols.length > 0 ? 'partial' : 'complete';
+    const source = valuationQuality === 'partial' ? 'partial' : 'cached';
 
     dailyProfits.push({
       userId,
@@ -254,6 +228,9 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
       dailyProfitAmount,
       cumulativeProfitAmount,
       totalAssets,
+      externalNetFlow,
+      weightedFlowCNY,
+      valuationQuality,
       source,
       isDirty: false
     });
@@ -266,6 +243,9 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
       cumulativeRevenue: cumulativeProfitAmount,
       cumulativeReturnRate: cumulativeReturn,
       totalAssets,
+      externalNetFlow,
+      weightedFlowCNY,
+      valuationQuality,
       cash: cashCNY,
       holdingsMarketValue,
       source,
@@ -273,6 +253,7 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
     });
 
     prevTotalAssets = totalAssets;
+    prevCumulativeReturn = cumulativeReturn;
   }
 
   if (dailyProfits.length > 0) {
@@ -286,6 +267,9 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
             dailyProfitAmount: item.dailyProfitAmount,
             cumulativeProfitAmount: item.cumulativeProfitAmount,
             totalAssets: item.totalAssets,
+            externalNetFlow: item.externalNetFlow,
+            weightedFlowCNY: item.weightedFlowCNY,
+            valuationQuality: item.valuationQuality,
             source: item.source,
             isDirty: false
           }
@@ -304,6 +288,9 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
             cumulativeRevenue: item.cumulativeRevenue,
             cumulativeReturnRate: item.cumulativeReturnRate,
             totalAssets: item.totalAssets,
+            externalNetFlow: item.externalNetFlow,
+            weightedFlowCNY: item.weightedFlowCNY,
+            valuationQuality: item.valuationQuality,
             cash: item.cash,
             holdingsMarketValue: item.holdingsMarketValue,
             source: item.source,
@@ -338,68 +325,27 @@ const upsertTodayDailyProfit = async (userId, offsetMinutes = DEFAULT_OFFSET_MIN
   const principal = Number(asset.currentPrincipal) || 0;
   const cash = Number(asset.cash) || 0;
   const holdingsMarketValue = Number(asset.holdingsMarketValue) || 0;
-
-  const yesterdayStr = new Date(Date.parse(dateStr) - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const yesterdayProfit = await DailyProfit.findOne({ userId, date: yesterdayStr });
-  const yesterdayTotalAssets = yesterdayProfit ? Number(yesterdayProfit.totalAssets) : principal;
-
-  // 今日资金转入转出不属于投资收益，需要从当日盈亏中剔除
-  const todayStart = parseDateInOffset(`${dateStr} 00:00:00`, offsetMinutes);
-  const tomorrowStart = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
-  const todayTransfers = await Transfer.find({
-    userId,
-    date: { $gte: todayStart, $lt: tomorrowStart }
-  });
-
-  const rates = await getRates();
-  const transferFlow = round2(todayTransfers.reduce((sum, t) => {
-    const rate = rates[t.currency || 'CNY'] || 1;
-    const amountCNY = (Number(t.amount) || 0) * rate;
-    return sum + (t.type === 'IN' ? amountCNY : -amountCNY);
-  }, 0));
-
-  const dailyProfitAmount = yesterdayTotalAssets > 0 ? round2(totalAssets - yesterdayTotalAssets - transferFlow) : 0;
-  const dailyReturn = yesterdayTotalAssets > 0 ? round2((dailyProfitAmount / yesterdayTotalAssets) * 100) : 0;
-  const cumulativeReturn = principal > 0 ? round2(((totalAssets - principal) / principal) * 100) : 0;
+  const yesterdayProfit = await DailyProfit.findOne({ userId, date: getPreviousDateStr(dateStr, offsetMinutes) }).lean();
+  const previousAssets = yesterdayProfit ? Number(yesterdayProfit.totalAssets) : null;
+  const previousCumulativeReturn = Number(yesterdayProfit?.cumulativeReturn) || 0;
+  const { start: dayStart, end: dayEnd } = getDayRangeInOffset(offsetMinutes);
+  const todayTransfers = await Transfer.find({ userId, date: { $gte: dayStart, $lt: dayEnd } });
+  const flows = todayTransfers.map((transfer) => ({
+    amountCNY: (transfer.type === 'IN' ? 1 : -1) * Number(transfer.amountCNY),
+    occurredAt: transfer.date
+  }));
+  const performance = previousAssets === null
+    ? { dailyProfitAmount: 0, dailyReturn: 0, externalNetFlow: 0, weightedFlowCNY: 0 }
+    : calculateModifiedDietzReturn({ openingAssetsCNY: previousAssets, closingAssetsCNY: totalAssets, flows, dayStart, dayEnd });
+  const cumulativeReturn = round2((((1 + previousCumulativeReturn / 100) * (1 + performance.dailyReturn / 100)) - 1) * 100);
   const cumulativeProfitAmount = round2(totalAssets - principal);
+  const valuationQuality = ['complete', 'stale', 'partial'].includes(asset.valuationQuality) ? asset.valuationQuality : 'partial';
+  const shared = { totalAssets, externalNetFlow: performance.externalNetFlow, weightedFlowCNY: performance.weightedFlowCNY, valuationQuality, source: valuationQuality === 'partial' ? 'partial' : 'realtime', isDirty: false };
 
-  await DailyProfit.updateOne(
-    { userId, date: dateStr },
-    {
-      $set: {
-        dailyReturn,
-        cumulativeReturn,
-        dailyProfitAmount,
-        cumulativeProfitAmount,
-        totalAssets,
-        source: 'realtime',
-        isDirty: false
-      }
-    },
-    { upsert: true }
-  );
-
-  await DailyRevenue.updateOne(
-    { userId, date: dateStr },
-    {
-      $set: {
-        revenue: dailyProfitAmount,
-        returnRate: dailyReturn,
-        cumulativeRevenue: cumulativeProfitAmount,
-        cumulativeReturnRate: cumulativeReturn,
-        totalAssets,
-        cash,
-        holdingsMarketValue,
-        source: 'realtime',
-        isDirty: false
-      }
-    },
-    { upsert: true }
-  );
-
+  await DailyProfit.updateOne({ userId, date: dateStr }, { $set: { ...shared, dailyReturn: performance.dailyReturn, cumulativeReturn, dailyProfitAmount: performance.dailyProfitAmount, cumulativeProfitAmount } }, { upsert: true });
+  await DailyRevenue.updateOne({ userId, date: dateStr }, { $set: { ...shared, revenue: performance.dailyProfitAmount, returnRate: performance.dailyReturn, cumulativeRevenue: cumulativeProfitAmount, cumulativeReturnRate: cumulativeReturn, cash, holdingsMarketValue } }, { upsert: true });
   return dateStr;
 };
-
 module.exports = {
   backfillDailyProfit,
   upsertTodayDailyProfit,
