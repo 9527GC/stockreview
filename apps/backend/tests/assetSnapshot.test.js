@@ -1,0 +1,103 @@
+jest.mock('../src/utils/currency', () => ({
+  getRates: jest.fn(() => Promise.resolve({ CNY: 1 }))
+}));
+
+jest.mock('../src/utils/marketData', () => ({
+  getQuotes: jest.fn(),
+  getQuoteLastClose: jest.fn((quote) => ({
+    price: quote?.preClose,
+    date: quote?.quoteDate || null
+  }))
+}));
+
+const app = require('../src/index');
+const User = require('../src/models/User');
+const Transfer = require('../src/models/Transfer');
+const { Trade, Holding } = require('../src/models/Trade');
+const { Asset } = require('../src/models/Asset');
+const { getQuotes } = require('../src/utils/marketData');
+const { refreshAssetMarketValue } = require('../src/utils/assetSnapshot');
+
+let userId;
+
+beforeAll(async () => {
+  const user = await User.create({
+    username: 'valuationsnapshottest',
+    password: 'password123',
+    nickname: 'Valuation Snapshot Test'
+  });
+  userId = user._id;
+});
+
+beforeEach(async () => {
+  getQuotes.mockReset();
+  await Promise.all([
+    Transfer.deleteMany({ userId }),
+    Trade.deleteMany({ userId }),
+    Holding.deleteMany({ userId }),
+    Asset.deleteMany({ userId })
+  ]);
+});
+
+afterAll(async () => {
+  await User.deleteMany({ username: 'valuationsnapshottest' });
+});
+
+describe('refreshAssetMarketValue', () => {
+  test('从账本重建现金，并写入估值与行情质量', async () => {
+    await Transfer.create({
+      userId,
+      type: 'IN',
+      amount: 1000,
+      currency: 'CNY',
+      fxRateToCNY: 1,
+      amountCNY: 1000,
+      date: new Date('2026-09-19T01:00:00.000Z')
+    });
+    await Trade.create({
+      userId,
+      symbol: '600519.SH',
+      name: '贵州茅台',
+      type: 'BUY',
+      price: 50,
+      quantity: 2,
+      commission: 0,
+      currency: 'CNY',
+      fxRateToCNY: 1,
+      grossAmount: 100,
+      netSettlementAmount: 100,
+      date: new Date('2026-09-19T02:00:00.000Z')
+    });
+    await Holding.create({
+      userId,
+      symbol: '600519.SH',
+      name: '贵州茅台',
+      quantity: 2,
+      avgCost: 50,
+      currency: 'CNY'
+    });
+    getQuotes.mockResolvedValue({
+      '600519.SH': {
+        symbol: '600519.SH',
+        price: 50,
+        preClose: 45,
+        quoteDate: '2026-09-19'
+      }
+    });
+
+    const asset = await refreshAssetMarketValue(userId);
+    const holding = await Holding.findOne({ userId }).lean();
+
+    expect({ ...asset.toObject(), cashBalances: Object.fromEntries(asset.cashBalances) }).toMatchObject({
+      cashBalances: { CNY: 900, HKD: 0, USD: 0 },
+      cash: 900,
+      holdingsMarketValue: 100,
+      totalAssets: 1000,
+      valuationQuality: 'complete'
+    });
+    expect(holding).toMatchObject({
+      lastPrice: 45,
+      lastPriceDate: '2026-09-19'
+    });
+  });
+});

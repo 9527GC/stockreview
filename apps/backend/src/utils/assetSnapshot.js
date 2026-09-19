@@ -1,44 +1,58 @@
-const { Holding } = require('../models/Trade');
+const { Holding, Trade } = require('../models/Trade');
+const Transfer = require('../models/Transfer');
 const { Asset } = require('../models/Asset');
 const { getRates } = require('./currency');
-const { getQuotes } = require('./marketData');
-const { round2 } = require('./pnl');
+const { getQuotes, getQuoteLastClose } = require('./marketData');
+const { buildLedger } = require('./ledger');
+const { valuatePortfolio } = require('./portfolioValuation');
+
+const findQuote = (quotes, symbol) => quotes[symbol]
+  || Object.values(quotes).find((quote) => quote?.symbol === symbol)
+  || null;
+
+const buildFallbackPrices = (holdings) => holdings.reduce((prices, holding) => {
+  prices[holding.symbol] = {
+    price: holding.lastPrice,
+    date: holding.lastPriceDate || holding.lastPriceAt || null
+  };
+  return prices;
+}, {});
 
 const refreshAssetMarketValue = async (userId) => {
-  const holdings = await Holding.find({ userId });
-  const symbols = holdings.map(h => h.symbol);
-
-  const [rates, quotes] = await Promise.all([
-    getRates(),
-    getQuotes(symbols)
+  const [holdings, transfers, trades, rates] = await Promise.all([
+    Holding.find({ userId }),
+    Transfer.find({ userId }).sort({ date: 1, _id: 1 }),
+    Trade.find({ userId }).sort({ date: 1, _id: 1 }),
+    getRates()
   ]);
+  const quotes = await getQuotes(holdings.map((holding) => holding.symbol));
+  const valuation = valuatePortfolio({
+    cashBalances: buildLedger({ transfers, trades }).cashBalances,
+    holdings,
+    quotes,
+    rates,
+    fallbackPrices: buildFallbackPrices(holdings)
+  });
 
-  const priceUpdates = [];
-  let holdingsMarketValue = 0;
+  const priceUpdates = holdings.flatMap((holding) => {
+    const lastClose = getQuoteLastClose(findQuote(quotes, holding.symbol));
+    if (!lastClose) return [];
 
-  holdings.forEach((holding) => {
-    let currentPrice = null;
-    const quote = quotes[holding.symbol] || Object.values(quotes).find(q => q.symbol === holding.symbol);
+    const lastPriceDate = lastClose.date;
+    if (holding.lastPrice === lastClose.price && holding.lastPriceDate === lastPriceDate) return [];
 
-    const closePrice = quote?.preClose && quote.preClose > 0 ? quote.preClose : null;
-    if (closePrice !== null && holding.lastPrice !== closePrice) {
-      priceUpdates.push({
-        updateOne: {
-          filter: { _id: holding._id },
-          update: { $set: { lastPrice: closePrice, lastPriceAt: new Date() } }
+    return [{
+      updateOne: {
+        filter: { _id: holding._id },
+        update: {
+          $set: {
+            lastPrice: lastClose.price,
+            lastPriceAt: new Date(),
+            lastPriceDate
+          }
         }
-      });
-    }
-
-    if (quote && quote.price > 0) {
-      currentPrice = quote.price;
-    } else if (holding.lastPrice && holding.lastPrice > 0) {
-      currentPrice = holding.lastPrice;
-    }
-
-    const marketValue = currentPrice !== null ? holding.quantity * currentPrice : 0;
-    const rate = rates[holding.currency] || 1;
-    holdingsMarketValue += marketValue * rate;
+      }
+    }];
   });
 
   if (priceUpdates.length > 0) {
@@ -46,12 +60,15 @@ const refreshAssetMarketValue = async (userId) => {
   }
 
   let asset = await Asset.findOne({ userId });
-  if (!asset) {
-    asset = new Asset({ userId, cash: 0, currentPrincipal: 0 });
-  }
+  if (!asset) asset = new Asset({ userId });
 
-  asset.holdingsMarketValue = round2(holdingsMarketValue);
-  asset.totalAssets = round2((asset.cash || 0) + asset.holdingsMarketValue);
+  const ledger = buildLedger({ transfers, trades });
+  asset.cashBalances = valuation.cashByCurrency;
+  asset.cash = valuation.cashCNY;
+  asset.currentPrincipal = ledger.principalCNY;
+  asset.holdingsMarketValue = valuation.holdingsMarketValueCNY;
+  asset.totalAssets = valuation.totalAssetsCNY;
+  asset.valuationQuality = valuation.quality;
   asset.totalHoldingsCount = holdings.length;
   await asset.save();
 

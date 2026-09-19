@@ -1226,6 +1226,16 @@ const parseSinaData = (code, dataStr) => {
   return result;
 };
 
+const getQuoteLastClose = (quote) => {
+  const price = Number(quote?.preClose);
+  if (!Number.isFinite(price) || price <= 0) return null;
+
+  const date = String(quote?.quoteDate || '').trim();
+  return {
+    price,
+    date: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null
+  };
+};
 /**
  * 获取实时行情
  * @param {string|string[]} symbols 股票代码或代码数组
@@ -1440,6 +1450,7 @@ const getMarketOverview = async ({ date, forceRefresh = false } = {}) => {
 
 module.exports = {
   getQuotes,
+  getQuoteLastClose,
   getMarketOverview,
   buildTradeMarketSnapshot,
   buildBenchmarkCurvePoints,
