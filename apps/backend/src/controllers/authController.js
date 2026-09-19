@@ -15,6 +15,8 @@ const generateToken = (user) => {
   return { token, jti };
 };
 
+exports.generateToken = generateToken;
+
 exports.login = async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -128,3 +130,4 @@ exports.logout = async (req, res) => {
 
 module.exports.generateToken = generateToken;
 module.exports.TOKEN_EXPIRES_IN = TOKEN_EXPIRES_IN;
+

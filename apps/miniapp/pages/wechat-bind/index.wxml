@@ -1,0 +1,25 @@
+<view class="page">
+  <view class="background-orb orb-one"></view>
+  <view class="background-orb orb-two"></view>
+  <view class="card">
+    <image wx:if="{{accountAvatar}}" class="avatar" src="{{accountAvatar}}" mode="aspectFill" />
+    <view wx:if="{{accountNickname}}" class="account-name">{{accountNickname}}</view>
+    <view wx:if="{{status !== 'profile'}}" class="title">{{title}}</view>
+    <view class="message">{{message}}</view>
+    <view wx:if="{{status === 'profile'}}" class="profile-form">
+      <button class="avatar-picker" open-type="chooseAvatar" bindchooseavatar="chooseAvatar">
+        <image wx:if="{{draftAvatar}}" class="avatar profile-avatar" src="{{draftAvatar}}" mode="aspectFill" />
+        <view wx:else class="avatar-placeholder"><text class="camera-icon">＋</text><text>选择头像</text></view>
+        <view class="avatar-edit">更换</view>
+      </button>
+      <view class="field-label">微信昵称</view>
+      <view class="input-wrap">
+        <text class="input-icon">●</text>
+        <input class="nickname-input" type="nickname" value="{{draftNickname}}" bindinput="nicknameInput" placeholder="请选择或输入昵称" />
+      </view>
+      <button class="action" bindtap="submitProfile"><text>确认并绑定</text><text class="action-arrow">→</text></button>
+      <view class="privacy-note"><text class="lock-icon">⌕</text> 仅用于展示和账号绑定，我们不会公开你的资料</view>
+    </view>
+    <button wx:if="{{actionText && status !== 'profile'}}" class="action" bindtap="handleAction">{{actionText}}</button>
+  </view>
+</view>

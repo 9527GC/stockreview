@@ -15,6 +15,8 @@ const userSchema = new mongoose.Schema({
   avatar: { type: String },
   wechatOpenId: { type: String, unique: true, sparse: true },
   wechatUnionId: { type: String, unique: true, sparse: true },
+  wechatNickname: { type: String, trim: true, maxlength: 50 },
+  wechatAvatar: { type: String, trim: true, maxlength: 2048 },
   commissionPreference: {
     type: Map,
     of: commissionPreferenceSchema,

@@ -9,7 +9,9 @@ const formatUserProfile = (user) => ({
   username: user.username,
   nickname: user.nickname,
   avatar: user.avatar,
-  wechatBound: !!user.wechatOpenId
+  wechatBound: !!user.wechatOpenId,
+  wechatNickname: user.wechatNickname,
+  wechatAvatar: user.wechatAvatar
 });
 
 /**

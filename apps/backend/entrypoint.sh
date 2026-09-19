@@ -5,7 +5,8 @@
 
 ENV=${1:-dev}
 
-cd /home/devbox/project
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
 if [ "$ENV" = "prod" ]; then
     echo "Starting production server..."

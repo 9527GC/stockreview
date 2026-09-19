@@ -44,6 +44,12 @@
           </a-button>
         </div>
 
+        <a-modal v-model:open="wechatModalOpen" title="微信扫码登录" :footer="null" width="320px" wrap-class-name="wechat-login-modal" @cancel="stopWechatPolling">
+          <div class="wechat-login-content">
+            <img v-if="wechatQr" :src="'data:image/png;base64,'+wechatQr" alt="微信扫码登录二维码" />
+            <p>{{ wechatStatusText }}</p>
+          </div>
+        </a-modal>
         <div class="social-login">
            <span class="label">其他登录方式：</span>
            <div class="icons">
@@ -61,10 +67,11 @@
 </template>
 
 <script setup>
-import { ref, onMounted, reactive } from 'vue'
+import { ref, onBeforeUnmount, onMounted, reactive } from 'vue'
 import { message } from 'ant-design-vue'
-import { login } from '@/api/index'
+import { login, createMiniappLoginCode, getMiniappLoginStatus } from '@/api/index'
 import { appConfig } from '@/config/env'
+import { createWechatLoginPoller } from './wechatLoginPolling'
 import { useUserStore } from '@/stores/user'
 import {
   UserOutlined,
@@ -79,6 +86,10 @@ const formState = reactive({
 })
 const autoLogin = ref(uni.getStorageSync('autoLogin') === 'true')
 const loading = ref(false)
+const wechatModalOpen = ref(false)
+const wechatQr = ref('')
+const wechatToken = ref('')
+const wechatStatusText = ref('请使用微信扫描二维码')
 const loginBackgroundStyle = appConfig.loginBackgroundUrl
   ? { backgroundImage: `url('${appConfig.loginBackgroundUrl}')` }
   : {}
@@ -135,12 +146,44 @@ const handleLogin = async () => {
   }
 }
 
-const handleWechatLogin = () => {
-  message.loading('正在调起微信登录...', 1)
-  setTimeout(() => {
-     message.success('模拟微信登录成功')
-  }, 1000)
+const wechatPoller = createWechatLoginPoller({
+  getStatus: getMiniappLoginStatus,
+  onConfirmed: (status) => {
+    uni.setStorageSync('token', status.token)
+    uni.setStorageSync('userInfo', JSON.stringify(status.userInfo || {}))
+    userStore.setUserInfo(status.userInfo || {})
+    wechatModalOpen.value = false
+    uni.reLaunch({ url: '/pages/assets/index' })
+  },
+  onTerminal: (status) => {
+    wechatStatusText.value = status.status === 'expired' ? '二维码已过期，请关闭后重新生成。' : '微信登录失败，请关闭后重新生成。'
+  },
+  onNetworkError: () => {
+    wechatStatusText.value = '查询登录状态失败，请关闭后重新生成二维码。'
+  }
+})
+
+const stopWechatPolling = () => {
+  wechatPoller.stop()
 }
+
+const handleWechatLogin = async () => {
+  stopWechatPolling()
+  wechatModalOpen.value = true
+  wechatStatusText.value = '正在生成二维码…'
+  try {
+    const result = await createMiniappLoginCode()
+    wechatToken.value = result.token
+    wechatQr.value = result.image
+    wechatStatusText.value = '请使用微信扫描二维码'
+    wechatPoller.start(wechatToken.value)
+  } catch (error) {
+    wechatQr.value = ''
+    wechatStatusText.value = error?.message || '二维码生成失败，请稍后重试。'
+  }
+}
+
+onBeforeUnmount(stopWechatPolling)
 
 const handleForgotPassword = () => {
   message.info('点击了忘记密码')
@@ -291,6 +334,47 @@ const handleForgotPassword = () => {
   }
 }
 
+.wechat-login-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 0 10px;
+
+  img {
+    display: block;
+    width: 200px;
+    height: 200px;
+    object-fit: contain;
+    margin: 0 auto 12px;
+  }
+
+  p {
+    margin: 0;
+    color: rgba(0, 0, 0, 0.55);
+    font-size: 13px;
+    line-height: 20px;
+    text-align: center;
+  }
+}
+
+:deep(.wechat-login-modal .ant-modal-content) {
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+:deep(.wechat-login-modal .ant-modal-header) {
+  padding: 18px 20px 12px;
+}
+
+:deep(.wechat-login-modal .ant-modal-title) {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+:deep(.wechat-login-modal .ant-modal-body) {
+  padding: 4px 20px 18px;
+}
+
 /* Mobile responsive adjustments */
 @media screen and (max-width: 576px) {
   .login-container {
@@ -312,3 +396,5 @@ const handleForgotPassword = () => {
   }
 }
 </style>
+
+

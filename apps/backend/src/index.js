@@ -4,13 +4,13 @@ const nodeEnv = process.env.NODE_ENV || 'development';
 
 // Skip .env file loading in test mode so tests can inject their own env vars
 if (nodeEnv !== 'test') {
-  const envFile = nodeEnv === 'production' ? '.env.production' : '.env.development';
+  const envFile = `.env.${nodeEnv}`;
   let envPath = path.resolve(__dirname, '..', envFile);
 
   // 开发环境可回退到 .env，生产环境必须存在专属环境文件
   // 防止 .env.production 未入 Git 导致另一台机器部署时误用本地数据库
   if (!fs.existsSync(envPath)) {
-    if (nodeEnv === 'production') {
+    if (nodeEnv === 'production' || nodeEnv === 'staging') {
       console.error(`[FATAL] 生产环境文件 ${envFile} 不存在，请手动创建并配置正确的 MONGODB_URI 等环境变量。该文件不被 Git 管理，拉取仓库后不会自动存在。`);
       process.exit(1);
     } else {
@@ -23,7 +23,7 @@ if (nodeEnv !== 'test') {
   if (fs.existsSync(envPath)) {
       const envContent = fs.readFileSync(envPath, 'utf8');
       envContent.split('\n').forEach(line => {
-          const match = line.match(/^([^#=]+)=(.*)$/);
+          const match = line.match(/^([^#=]+)=(.*)\r?$/);
           if (match) {
               const key = match[1].trim();
               const value = match[2].trim();
@@ -58,6 +58,8 @@ const profitCurveScheduler = require('./services/profitCurveScheduler');
 const dirtyDataManager = require('./services/dirtyDataManager');
 
 const app = express();
+// The app runs behind Nginx; trust the first proxy so rate limiting can read the real client IP.
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 
 // Mandatory environment checks
@@ -90,7 +92,14 @@ const limiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { message: 'Too many requests, please try again later' },
-  skip: (req) => req.path.startsWith('/market/') || req.path === '/market'
+  skip: (req) => (
+    req.path.startsWith('/market/') ||
+    req.path === '/market' ||
+    // The authenticated QR-binding page polls this endpoint until the scan completes.
+    req.path === '/users/wechat/miniapp-bind-status' ||
+    // The PC login dialog polls this endpoint while waiting for a scan.
+    req.path === '/auth/wechat/miniapp-login/status'
+  )
 });
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -187,3 +196,7 @@ mongoose.connect(process.env.MONGODB_URI)
   });
 
 module.exports = app;
+
+
+
+

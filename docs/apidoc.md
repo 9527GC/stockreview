@@ -16,8 +16,8 @@
 
 | 环境 | 说明 | 启动命令 | 数据库 |
 |------|------|----------|--------|
-| `development` | 本地开发 / 测试 | `npm run dev` | 本地 MongoDB 或 Sealos 测试库 |
-| `production` | 生产环境 | `npm run start:prod` | `stockreview-prod-mongodb` (Sealos) |
+| `development` | 本地开发 / 测试 | `npm run dev` | 本地 MongoDB 或阿里云测试数据库 |
+| `production` | 生产环境 | `npm run start:prod` | 阿里云 MongoDB |
 
 ### 环境变量配置
 
@@ -25,7 +25,7 @@
 
 | 文件 | 用途 |
 |------|------|
-| `.env.development` | 开发/测试环境配置（连接 Sealos 测试数据库） |
+| `.env.development` | 开发/测试环境配置（连接测试数据库） |
 | `.env.production` | 生产环境配置（连接生产数据库） |
 
 **关键环境变量：**
@@ -45,7 +45,7 @@
 | 前端环境 | 构建命令 | 后端 API 域名 |
 |----------|----------|---------------|
 | 开发/测试 | `npm run dev:h5` | `http://127.0.0.1:3000` (本地) |
-| 生产 | `npm run build:h5` | `https://yejzomctgjua.sealosbja.site` |
+| 生产 | `npm run build:h5` | `实际部署的前端 HTTPS 域名` |
 
 ***
 
@@ -130,7 +130,7 @@
   - 推荐由服务器 `cron` 按北京时间触发，而不是简单固定“每天 2 点一次”：
     - A 股 / 港股收盘后：`10 16 * * 1-5 cd <项目路径> && npm run snapshot:profit-history -- --markets=CN,HK`
     - 美股收盘后：`10 5 * * 2-6 cd <项目路径> && npm run snapshot:profit-history -- --markets=US`
-    - （Sealos 部署时项目路径通常为 `/home/devbox/project`，请根据实际环境修改）
+    - （请根据阿里云实际项目目录修改）
   - 批处理会先按市场过滤账户，并确认目标市场“今天确实已有新行情或今日有交易”后，才刷新账户持仓市值并 upsert 当天 `DailyProfit`，避免节假日/非交易时段误写快照
   - 若只部署单个后端实例，也可设置环境变量 `ENABLE_PROFIT_HISTORY_SCHEDULER=true` 启用进程内定时器；多实例部署不建议开启，避免重复触发
 - **入参 (Query)**:
@@ -626,3 +626,4 @@
   | currency | string | 否  | 币种                     |
   | date     | string | 否  | 日期                     |
   | remark   | string | 否  | 备注                     |
+

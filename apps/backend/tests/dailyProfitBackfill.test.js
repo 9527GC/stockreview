@@ -5,6 +5,8 @@ const User = require('../src/models/User');
 const { Trade, Holding } = require('../src/models/Trade');
 const { Asset } = require('../src/models/Asset');
 const DailyRevenue = require('../src/models/DailyRevenue');
+const DailyProfit = require('../src/models/DailyProfit');
+const HistoricalQuote = require('../src/models/HistoricalQuote');
 
 // 避免测试期间调用外部行情接口
 jest.mock('../src/utils/currency', () => ({
@@ -17,6 +19,15 @@ jest.mock('../src/utils/historicalQuotes', () => ({
   getStockHistoricalQuotesMap: jest.fn(() => Promise.resolve({}))
 }));
 
+jest.mock('../src/utils/historicalQuoteCache', () => ({
+  getQuotesForRange: jest.fn(async (symbols, startDate, endDate) => {
+    const quotes = new Map();
+    for (const date of [startDate, endDate]) {
+      quotes.set(date, Object.fromEntries(symbols.map(symbol => [symbol, { close: 1000 }])));
+    }
+    return quotes;
+  })
+}));
 jest.mock('../src/utils/marketData', () => {
   const actual = jest.requireActual('../src/utils/marketData');
   return {

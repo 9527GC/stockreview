@@ -203,6 +203,31 @@ export const getWechatBindUrl = () => {
   });
 };
 
+export const createMiniappBindCode = () => {
+  return request({
+    url: '/api/users/wechat/miniapp-bind-code',
+    method: 'POST'
+  });
+};
+
+export const getMiniappBindStatus = (token) => {
+  return request({
+    url: '/api/users/wechat/miniapp-bind-status',
+    method: 'GET',
+    params: { token },
+    silent: true
+  });
+};
+
+export const bindMiniappWechat = (data) => {
+  return request({
+    url: '/api/users/wechat/miniapp-bind',
+    method: 'POST',
+    data,
+    silent: true
+  });
+};
+
 export const unbindWechat = () => {
   return request({
     url: '/api/users/wechat/bind',
@@ -238,3 +263,6 @@ export const uploadAvatar = (filePath) => {
     });
   });
 };
+
+export const createMiniappLoginCode = () => request({ url: '/api/auth/wechat/miniapp-login/create', method: 'POST', silent: true });
+export const getMiniappLoginStatus = (token) => request({ url: '/api/auth/wechat/miniapp-login/status', method: 'GET', params: { token }, silent: true });

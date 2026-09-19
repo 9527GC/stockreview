@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <PCLayout page-title="个人中心" active-key="">
     <div class="profile-page">
 <main class="settings-content">
@@ -11,11 +11,11 @@
           <div class="identity-panel">
             <div class="avatar-wrapper" @click="handleChooseAvatar">
               <a-avatar :size="112" :src="safeAvatar" class="profile-avatar">
-                {{ userStore.userInfo?.nickname?.charAt(0) || userStore.userInfo?.username?.charAt(0) || 'U' }}
+                {{ displayNickname.charAt(0) || userStore.userInfo?.username?.charAt(0) || 'U' }}
               </a-avatar>
               <div class="avatar-mask"><CameraOutlined /></div>
             </div>
-            <h2>{{ userStore.userInfo?.nickname || userStore.userInfo?.username || '用户' }}</h2>
+            <h2>{{ displayNickname || userStore.userInfo?.username || '用户' }}</h2>
             <a-button class="avatar-button" @click="handleChooseAvatar">更换头像</a-button>
           </div>
 
@@ -41,20 +41,20 @@
         </section>
 
         <section ref="wechatSection" :class="['binding-card', { bound: userStore.userInfo?.wechatBound }]">
-          <div class="binding-trigger" @click="!userStore.userInfo?.wechatBound && handleBindWechat">
+          <div class="binding-trigger" @click="!userStore.userInfo?.wechatBound && handleBindWechat()">
             <div class="binding-icon"><WechatOutlined /></div>
-            <div class="binding-copy"><strong>{{ userStore.userInfo?.wechatBound ? '微信已绑定' : '绑定微信' }}</strong><span>{{ userStore.userInfo?.wechatBound ? '已绑定微信账号，可使用微信登录' : '点击此处绑定微信，登录更快捷' }}</span></div>
+            <div class="binding-copy"><strong>{{ userStore.userInfo?.wechatBound ? (userStore.userInfo?.wechatNickname || "") : "绑定微信" }}</strong><span v-if="!userStore.userInfo?.wechatBound">点击此处绑定微信，登录更快捷</span></div>
           </div>
-          <span v-if="userStore.userInfo?.wechatBound" class="binding-status">已绑定</span>
+          <a-button v-if="userStore.userInfo?.wechatBound" type="primary" class="unbind-button" :loading="unbinding" @click.stop="handleUnbindWechat">解绑</a-button>
         </section>
       </main>
     </div>
 
-    <a-modal v-model:open="wechatQrVisible" title="扫码绑定微信" :footer="null" width="360px">
+    <a-modal v-model:open="wechatQrVisible" title="扫码打开小程序绑定微信" :footer="null" width="360px" @cancel="stopBindPolling">
       <div class="wechat-qr-modal">
-        <p>请使用微信扫描二维码完成绑定</p>
-        <img v-if="wechatQrUrl" :src="wechatQrUrl" alt="微信绑定二维码" />
-        <span>二维码有效期约 10 分钟</span>
+        <p>请使用微信扫一扫，打开 Stock Review 小程序完成绑定</p>
+        <img v-if="wechatQrUrl" :src="wechatQrUrl" alt="Stock Review 小程序绑定码" />
+        <span>二维码有效期约 {{ bindExpiresIn || 300 }} 秒</span>
       </div>
     </a-modal>
 
@@ -67,16 +67,18 @@
     </a-modal>
   </PCLayout>
 </template><script setup>
-import { ref, reactive, computed, onMounted } from 'vue';
-import { message } from 'ant-design-vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue';
+import { message, Modal } from 'ant-design-vue';
 import { CameraOutlined, WechatOutlined, UserOutlined, IdcardOutlined } from '@ant-design/icons-vue';
 import PCLayout from '@/layouts/PCLayout.vue';
+import defaultAvatar from '@/static/default-avatar.svg';
 import { useUserStore } from '@/stores/user';
 import {
   updateProfile,
   changePassword,
   uploadAvatar,
-  getWechatBindUrl,
+  createMiniappBindCode,
+  getMiniappBindStatus,
   unbindWechat
 } from '@/api/index';
 
@@ -88,10 +90,17 @@ const formState = reactive({
 
 const wechatSection = ref(null);
 
+const displayNickname = computed(() => {
+  const nickname = userStore.userInfo?.nickname;
+  const wechatNickname = userStore.userInfo?.wechatNickname;
+  const usableWechatNickname = wechatNickname && !/^(微信用户|微信用户[0-9_ -]*)$/i.test(wechatNickname) ? wechatNickname : '';
+  return nickname || usableWechatNickname || userStore.userInfo?.username || '用户';
+});
+
 const safeAvatar = computed(() => {
-  const avatar = userStore.userInfo?.avatar;
-  if (!avatar || typeof avatar !== 'string') return undefined;
-  if (/^https:\/\/example\.com\//i.test(avatar)) return undefined;
+  const avatar = userStore.userInfo?.avatar || userStore.userInfo?.wechatAvatar;
+  if (!avatar || typeof avatar !== 'string') return defaultAvatar;
+  if (/^https:\/\/example\.com\//i.test(avatar)) return defaultAvatar;
   return avatar;
 });
 
@@ -102,6 +111,9 @@ const changingPassword = ref(false);
 const passwordModalVisible = ref(false);
 const wechatQrVisible = ref(false);
 const wechatQrUrl = ref('');
+const bindToken = ref('');
+const bindExpiresIn = ref(0);
+let bindPollTimer = null;
 
 const passwordForm = reactive({
   oldPassword: '',
@@ -109,31 +121,21 @@ const passwordForm = reactive({
   confirmPassword: ''
 });
 
+watch(wechatQrVisible, (visible) => {
+  if (!visible) stopBindPolling();
+});
+
+onBeforeUnmount(() => stopBindPolling());
+
 onMounted(() => {
   // 进入页面时拉取最新资料
   userStore.fetchProfile().then(() => {
-    formState.nickname = userStore.userInfo?.nickname || ''; 
+    formState.nickname = userStore.userInfo?.nickname || userStore.userInfo?.wechatNickname || '';
   });
 
-  // 澶勭悊寰俊鎺堟潈鍥炶皟缁撴灉
-  checkWechatCallback();
 });
 
-const checkWechatCallback = () => {
-  if (typeof window === 'undefined') return;
-  const params = new URLSearchParams(window.location.search);
-  const wechatBind = params.get('wechat_bind');
-  if (wechatBind === 'success') {
-    message.success('寰俊缁戝畾鎴愬姛');
-    userStore.fetchProfile();
-    // 娓呯悊 URL 鍙傛暟
-    cleanUrlParams();
-  } else if (wechatBind === 'error') {
-    const msg = params.get('message') || '寰俊缁戝畾澶辫触';
-    message.error(decodeURIComponent(msg));
-    cleanUrlParams();
-  }
-};
+
 
 const cleanUrlParams = () => {
   if (typeof window === 'undefined') return;
@@ -250,34 +252,82 @@ const resetPasswordForm = () => {
   passwordForm.confirmPassword = '';
 };
 
-const handleBindWechat = async () => {
-  binding.value = true;
+const stopBindPolling = () => {
+  if (bindPollTimer) {
+    clearInterval(bindPollTimer);
+    bindPollTimer = null;
+  }
+};
+
+const pollBindStatus = async () => {
+  if (!bindToken.value) return;
   try {
-    const res = await getWechatBindUrl();
-    if (res?.url) {
-      wechatQrUrl.value = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(res.url)}`;
-      wechatQrVisible.value = true;
-    } else {
-      message.error('鑾峰彇寰俊鎺堟潈閾炬帴澶辫触');
+    const result = await getMiniappBindStatus(bindToken.value);
+    bindExpiresIn.value = result?.expiresIn || 0;
+    if (result?.status === 'bound') {
+      stopBindPolling();
+      wechatQrVisible.value = false;
+      message.success('微信绑定成功');
+      await userStore.fetchProfile();
+    } else if (result?.status === 'failed') {
+      stopBindPolling();
+      message.error(result.message || '微信绑定失败，请重新生成二维码');
+    } else if (result?.status === 'expired') {
+      stopBindPolling();
+      message.warning('二维码已过期，请重新生成');
     }
   } catch (err) {
-    console.error('Get wechat bind url failed:', err);
+    console.warn('Get mini-program bind status failed:', err);
+  }
+};
+
+const startBindPolling = () => {
+  stopBindPolling();
+  bindPollTimer = setInterval(pollBindStatus, 2000);
+};
+
+const handleBindWechat = async () => {
+  binding.value = true;
+  stopBindPolling();
+  try {
+    const res = await createMiniappBindCode();
+    if (!res?.qrCodeDataUrl || !res?.bindToken) {
+      throw new Error('未能生成小程序绑定码');
+    }
+    wechatQrUrl.value = res.qrCodeDataUrl;
+    bindToken.value = res.bindToken;
+    bindExpiresIn.value = res.expiresIn || 300;
+    wechatQrVisible.value = true;
+    startBindPolling();
+  } catch (err) {
+    console.error('Create mini-program bind code failed:', err);
   } finally {
     binding.value = false;
   }
 };
 
-const handleUnbindWechat = async () => {
-  unbinding.value = true;
-  try {
-    await unbindWechat();
-    message.success('寰俊瑙ｇ粦鎴愬姛');
-    await userStore.fetchProfile();
-  } catch (err) {
-    console.error('Unbind wechat failed:', err);
-  } finally {
-    unbinding.value = false;
-  }
+const handleUnbindWechat = () => {
+  Modal.confirm({
+    title: '确认解绑微信吗？',
+    content: '解绑后将无法继续使用微信快捷登录，确定要解绑吗？',
+    okText: '确认解绑',
+    cancelText: '取消',
+    okType: 'danger',
+    async onOk() {
+      unbinding.value = true;
+      try {
+        await unbindWechat();
+        message.success('微信解绑成功');
+        await userStore.fetchProfile();
+      } catch (err) {
+        console.error('Unbind wechat failed:', err);
+        message.error('微信解绑失败，请稍后重试');
+        throw err;
+      } finally {
+        unbinding.value = false;
+      }
+    }
+  });
 };
 </script><style lang="scss" scoped>
 .profile-page { min-height: 680px; overflow: hidden; border: 1px solid #edf0f5; border-radius: 14px; background: #fff; box-shadow: 0 8px 28px rgba(31, 35, 41, .04); }
@@ -289,15 +339,9 @@ const handleUnbindWechat = async () => {
 .content-heading { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 32px; }.eyebrow { color: #1677ff; font-size: 11px; font-weight: 700; letter-spacing: 2px; }.content-heading h1 { margin: 0 0 6px; color: #172033; font-size: 25px; }.content-heading p { margin: 0; color: #98a1b2; font-size: 13px; }.heading-dot { width: 48px; height: 48px; border-radius: 14px; background: linear-gradient(135deg, #e6f4ff, #f4f8ff); }
 .profile-card { display: grid; grid-template-columns: 220px minmax(360px, 1fr); gap: 54px; max-width: 980px; padding: 30px 32px 34px; border: 1px solid #edf0f5; border-radius: 14px; background: rgba(255,255,255,.88); }.identity-panel { display: flex; align-items: center; flex-direction: column; padding-top: 10px; border-right: 1px solid #f0f2f5; }.avatar-wrapper { position: relative; width: 112px; height: 112px; margin-bottom: 16px; overflow: hidden; border-radius: 50%; background: #e6f4ff; cursor: pointer; box-shadow: 0 8px 22px rgba(22,119,255,.15); }.profile-avatar { color: #1677ff; font-size: 38px; }.avatar-mask { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; opacity: 0; background: rgba(22,119,255,.72); color: #fff; font-size: 22px; transition: opacity .2s; }.avatar-wrapper:hover .avatar-mask { opacity: 1; }.identity-panel h2 { max-width: 180px; margin: 0 0 12px; overflow: hidden; color: #172033; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }.avatar-button { border-radius: 7px; color: #667085; }
 .profile-form { max-width: 560px; }.section-title { margin-bottom: 20px; color: #172033; font-size: 16px; font-weight: 600; }.profile-form :deep(.ant-form-item) { margin-bottom: 19px; }.profile-form :deep(.ant-form-item-label) { padding-bottom: 6px; }.profile-form :deep(.ant-form-item) { max-width: 480px; }.account-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 22px; }.meta-item { display: flex; flex-direction: column; gap: 8px; padding: 12px 0; border-bottom: 1px solid #f0f2f5; }.meta-label { color: #98a1b2; font-size: 13px; }.meta-label .anticon { margin-right: 6px; color: #aab3c2; }.meta-item strong { color: #273142; font-size: 14px; font-weight: 500; word-break: break-all; }.profile-form :deep(.ant-input), .profile-form :deep(.ant-input-affix-wrapper) { border-radius: 6px; }
-.binding-card { display: flex; align-items: center; gap: 14px; max-width: 980px; cursor: pointer; transition: border-color .2s, box-shadow .2s; margin-top: 20px; padding: 20px 24px; border: 1px solid #edf0f5; border-radius: 12px; }.binding-trigger { display: flex; align-items: center; gap: 14px; }.binding-trigger:hover { cursor: pointer; }.binding-trigger:hover .binding-copy strong { color: #1677ff; }.binding-card.bound { cursor: default; }.binding-card.bound .binding-icon { background: #e9f9ef; color: #07c160; }.binding-icon { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 10px; background: #e9f9ef; color: #07c160; font-size: 20px; }.binding-copy { display: flex; flex: 1; flex-direction: column; gap: 4px; }.binding-copy strong { color: #273142; font-size: 14px; }.binding-copy span { color: #98a1b2; font-size: 12px; }.binding-status { color: #07c160; font-size: 13px; }.binding-arrow { color: #1677ff; font-size: 13px; }.binding-arrow span { margin-left: 5px; font-size: 20px; vertical-align: -1px; }.wechat-qr-modal { text-align: center; padding: 4px 0 16px; }.wechat-qr-modal p { margin: 0 0 16px; color: #667085; }.wechat-qr-modal img { display: block; width: 240px; height: 240px; margin: 0 auto 14px; }.wechat-qr-modal span { color: #98a1b2; font-size: 12px; }
+.binding-card { display: flex; align-items: center; gap: 14px; max-width: 980px; cursor: pointer; transition: border-color .2s, box-shadow .2s; margin-top: 20px; padding: 20px 24px; border: 1px solid #edf0f5; border-radius: 12px; }.binding-trigger { display: flex; flex: 1; align-items: center; gap: 14px; }.binding-trigger:hover { cursor: pointer; }.binding-trigger:hover .binding-copy strong { color: #1677ff; }.binding-card.bound { cursor: default; }.binding-card.bound .binding-icon { background: #e9f9ef; color: #07c160; }.binding-icon { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 10px; background: #e9f9ef; color: #07c160; font-size: 20px; }.binding-copy { display: flex; flex: 1; flex-direction: column; gap: 4px; }.binding-copy strong { color: #273142; font-size: 14px; }.binding-copy span { color: #98a1b2; font-size: 12px; }.unbind-button { margin-left: auto; min-width: 72px; border-radius: 7px; }.binding-arrow { color: #1677ff; font-size: 13px; }.binding-arrow span { margin-left: 5px; font-size: 20px; vertical-align: -1px; }.wechat-qr-modal { text-align: center; padding: 4px 0 16px; }.wechat-qr-modal p { margin: 0 0 16px; color: #667085; }.wechat-qr-modal img { display: block; width: 200px; height: 200px; aspect-ratio: 1 / 1; object-fit: contain; margin: 0 auto 14px; }.wechat-qr-modal span { color: #98a1b2; font-size: 12px; }
 @media (max-width: 900px) { .settings-content { padding: 28px 32px; }.settings-content { padding: 28px 24px; }.profile-card { grid-template-columns: 1fr; gap: 28px; }.account-meta { grid-template-columns: 1fr; }.identity-panel { padding-bottom: 24px; border-right: 0; border-bottom: 1px solid #f0f2f5; } }
 </style>
-
-
-
-
-
-
 
 
 
