@@ -2,12 +2,24 @@ const Transfer = require('../models/Transfer');
 const { Trade } = require('../models/Trade');
 const { Asset } = require('../models/Asset');
 const { getRates } = require('../utils/currency');
-const { BEIJING_OFFSET_MINUTES, parseDateInOffset } = require('../utils/datetime');
+const { BEIJING_OFFSET_MINUTES, getDateStringInOffset, parseDateInOffset } = require('../utils/datetime');
 const { buildLedger } = require('../utils/ledger');
 const { sumCashBalancesCNY, toMoney, toCNY } = require('../utils/money');
 const { upsertTodayDailyProfit } = require('../utils/dailyProfitBackfill');
+const dirtyDataManager = require('../services/dirtyDataManager');
 
 const SUPPORTED_CURRENCIES = new Set(['CNY', 'HKD', 'USD']);
+
+const scheduleRecalc = async (userId, affectedDate) => {
+  await dirtyDataManager.markDirtyFromDate(userId, affectedDate);
+  const recalcPromise = dirtyDataManager.asyncRecalculate(userId);
+  if (process.env.NODE_ENV === 'test') {
+    await recalcPromise;
+    return;
+  }
+  recalcPromise.catch((error) => console.error('[Transfer] Error starting async recalculation:', error));
+};
+
 
 const rebuildCashAssetFromLedger = async (userId, rates) => {
   const [transfers, trades] = await Promise.all([
@@ -75,6 +87,7 @@ exports.addTransfer = async (req, res) => {
     });
     await rebuildCashAssetFromLedger(req.user._id, rates);
     await upsertTodayDailyProfit(req.user._id);
+    await scheduleRecalc(req.user._id, getDateStringInOffset(BEIJING_OFFSET_MINUTES, transfer.date));
     res.status(201).json(transfer);
   } catch (error) { res.status(500).json({ message: error.message }); }
 };

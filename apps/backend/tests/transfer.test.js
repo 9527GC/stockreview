@@ -8,6 +8,7 @@ const app = require('../src/index');
 const User = require('../src/models/User');
 const { Asset } = require('../src/models/Asset');
 const Transfer = require('../src/models/Transfer');
+const dirtyDataManager = require('../src/services/dirtyDataManager');
 
 let token;
 let userId;
@@ -93,6 +94,22 @@ describe('Transfer API', () => {
     expect(res.body.message).toContain('Insufficient cash');
   });
 
+  test('跨北京时间日期的入金从其北京时间归属日触发脏数据重算', async () => {
+    const markDirtyFromDate = jest.spyOn(dirtyDataManager, 'markDirtyFromDate').mockResolvedValue({});
+    const asyncRecalculate = jest.spyOn(dirtyDataManager, 'asyncRecalculate').mockResolvedValue();
+
+    const res = await request(app)
+      .post('/api/transfers')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ type: 'IN', amount: 100, date: '2026-09-19T16:30:00.000Z' });
+
+    expect(res.statusCode).toBe(201);
+    expect(markDirtyFromDate).toHaveBeenCalledWith(expect.anything(), '2026-09-20');
+    expect(asyncRecalculate).toHaveBeenCalledWith(expect.anything());
+
+    markDirtyFromDate.mockRestore();
+    asyncRecalculate.mockRestore();
+  });
   test('should create IN transfer and return total', async () => {
     await request(app)
       .post('/api/transfers')
