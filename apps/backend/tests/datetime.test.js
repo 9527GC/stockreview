@@ -15,14 +15,15 @@ test('北京时间凌晨仍返回北京时间业务日', () => {
 test.each([
   [{ symbol: '600519.SH' }, 'CNY'],
   [{ symbol: '830799.BJ' }, 'CNY'],
+  [{ market: '北交所' }, 'CNY'],
   [{ symbol: '00700.HK' }, 'HKD'],
   [{ symbol: 'AAPL.US' }, 'USD']
 ])('按市场推导唯一币种', (input, expected) => {
   expect(getCurrencyForMarket(input)).toBe(expected);
 });
 
-test('可辨识的代码和市场归属不同币种时拒绝输入', () => {
-  expect(() => getCurrencyForMarket({ symbol: '00700.HK', market: 'SH' }))
+test.each(['SH', '北交所'])('可辨识的代码和市场归属不同币种时拒绝输入：%s', (market) => {
+  expect(() => getCurrencyForMarket({ symbol: '00700.HK', market }))
     .toThrow('Symbol currency HKD conflicts with market currency CNY');
 });
 

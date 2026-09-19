@@ -1,6 +1,6 @@
 const { normalizeSymbol } = require('./symbol');
 
-const CNY_MARKETS = new Set(['CN', 'SH', 'SZ', 'BJ', 'A', 'A股']);
+const CNY_MARKETS = new Set(['CN', 'SH', 'SZ', 'BJ', '北交所', 'A', 'A股']);
 const HKD_MARKETS = new Set(['HK', '港股']);
 const USD_MARKETS = new Set(['US', '美股']);
 
