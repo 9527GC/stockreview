@@ -5,6 +5,11 @@ const transferSchema = new mongoose.Schema({
   type: { type: String, enum: ['IN', 'OUT'], required: true },
   amount: { type: Number, required: true },
   currency: { type: String, default: 'CNY' },
+  fxRateToCNY: { type: Number, default: 1 },
+  amountCNY: {
+    type: Number,
+    default() { return Number(this.amount); }
+  },
   date: { type: Date, default: Date.now },
   remark: { type: String }
 });

@@ -22,6 +22,19 @@ const tradeSchema = new mongoose.Schema({
   feeRate: { type: Number, default: null }, // 仅 mode=rate 时使用，单位：‱（万分之一）
   feeAmount: { type: Number, default: null }, // 仅 mode=amount 时使用，原始币种固定费用金额
   currency: { type: String, default: 'CNY' }, // CNY, USD, HKD
+  fxRateToCNY: { type: Number, default: 1 },
+  grossAmount: {
+    type: Number,
+    default() { return Number(this.price) * Number(this.quantity); }
+  },
+  netSettlementAmount: {
+    type: Number,
+    default() {
+      const grossAmount = Number(this.grossAmount);
+      const commission = Number(this.commission) || 0;
+      return this.type === 'BUY' ? grossAmount + commission : grossAmount - commission;
+    }
+  },
   market: { type: String }, // SH, SZ, HK, US
   mood: { type: String, enum: TRADE_MOODS, default: 'NEUTRAL' },
   marketOverview: { type: Object, default: null },
