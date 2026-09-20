@@ -49,6 +49,27 @@ const clampToastText = (text, maxLength = 140) => {
 
 const shouldSilence = (options) => options.silent === true;
 
+const formatNetworkError = (error) => {
+  const rawErrorText = extractErrorText(error) || error?.errMsg || error?.message || '';
+  const normalized = String(rawErrorText).toLowerCase();
+
+  if (normalized.includes('missing required config: apibaseurl')) {
+    return '测试环境接口地址未配置，请联系管理员';
+  }
+  if (normalized.includes('timeout') || normalized.includes('超时')) {
+    return '连接超时，请检查网络后重试';
+  }
+  if (
+    normalized.includes('failed to fetch') ||
+    normalized.includes('network') ||
+    normalized.includes('connection') ||
+    normalized.includes('网络')
+  ) {
+    return '无法连接服务器，请检查网络后重试';
+  }
+  return rawErrorText || '网络异常，请稍后重试';
+};
+
 const request = (options) => {
   return new Promise((resolve, reject) => {
     const token = uni.getStorageSync('token');
@@ -121,7 +142,7 @@ const request = (options) => {
           });
 
           uni.showToast({
-            title: clampToastText(extractErrorText(err) || err?.errMsg || '网络错误'),
+            title: clampToastText(formatNetworkError(err)),
             icon: 'none'
           });
         }
@@ -131,5 +152,5 @@ const request = (options) => {
   });
 };
 
-export { safeStringify, extractErrorText, clampToastText };
+export { safeStringify, extractErrorText, clampToastText, formatNetworkError };
 export default request;
