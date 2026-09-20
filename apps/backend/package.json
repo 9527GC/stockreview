@@ -8,6 +8,8 @@
     "start:prod": "NODE_ENV=production node src/index.js",
     "dev": "node src/index.js",
     "snapshot:profit-history": "node scripts/snapshot_profit_history.js",
+    "reset:user-business-data": "node scripts/reset-user-business-data.js",
+    "reset:all-business-data": "node scripts/reset-user-business-data.js",
     "lint": "eslint src/",
     "test": "jest --runInBand --forceExit",
     "audit": "npm audit"
