@@ -87,7 +87,7 @@
   - `currentPrincipal`(本金/净投入) = 初始本金 + 转入(IN) + 转出(OUT, 记为负数)（均折算为 CNY）。
     - 初始本金通常表现为第一笔 `IN`（可在 `remark` 标注“初始入金/初始本金”）。
     - 买入/卖出交易不会改变本金，只会改变现金与持仓市值。
-  - `totalDailyProfit`(今日盈亏) = Σ(按标的计算的今日盈亏)；统计范围为「当前持仓标的 + 今日发生过交易的标的」，因此即便某标的今天买入后又卖出、最终持仓为 0，也会计入今日盈亏。
+  - `totalDailyProfit`（今日盈亏）直接读取北京时间当日 `DailyProfit.dailyProfitAmount` 快照；它与收益曲线使用同一日收益快照，不再从当前持仓临时重算。
   - “今日”边界：按北京时间 (UTC+8) 的 00:00\~24:00 统计今日交易。
   - **手续费处理**:
     - `totalAssets` 已考虑交易手续费：买入会从 `cash` 扣除手续费，卖出会从回款中扣除手续费，因此手续费会直接影响总资产。
@@ -115,14 +115,14 @@
 - **接口地址**: `GET /assets/profit-curve`
 - **说明**: 获取历史收益率走势数据。
 - **口径说明**:
-  - `data[].value`：个人收益率（百分比数值），直接来自 `DailyProfit.cumulativeReturn`。
-  - 写入口径：`value = ((totalAssets - currentPrincipal) / currentPrincipal) * 100`；当 `currentPrincipal <= 0` 时返回 `0`。
+  - `data[].value`：个人区间累计收益率（百分比数值），由区间内 `DailyProfit.dailyReturn` 按时间顺序复利计算；若区间前已有快照，首日也参与复利，否则首个点是零基线。
+  - `DailyProfit.dailyReturn` 已按外部资金流调整，区间内入金/出金不会被误判为投资收益。
   - `data[].benchmark`：基准曲线（百分比数值），当前由后端在请求时按上证指数 (`000001.SH`) 历史日线**实时计算**，不会随每日收益记录持久化。
     - 计算口径：以当前返回区间内“首个可用交易日”的上证指数收盘点位作为基线，`benchmark = ((indexClose / indexBaseClose) - 1) * 100`。
     - 若某日缺少对应的基准历史数据，`benchmark` 返回 `null`，不会静默回填成 `0`。
   - 顶层返回中的 `benchmarkName` / `benchmarkSymbol` 用于明确当前基准语义，避免前后端理解不一致。
   - 个人每日收益率入库：当日发生资产变动（新增/删除/修改交易、删除持仓、入金出金）或请求 `GET /assets/summary` 时，后端会 upsert 当天的 `DailyProfit` 记录：
-    - `DailyProfit.cumulativeReturn` 按 `((totalAssets - currentPrincipal) / currentPrincipal) * 100` 写入；当 `currentPrincipal <= 0` 时写入 `0`
+    - `DailyProfit` 同时保存当日收益率、当日盈亏额、外部资金流与估值质量；历史流水的 CNY 金额使用写入时锁定的汇率，不会以当前汇率重估
     - 收益曲线请求时的 `benchmark` 按上证指数累计涨跌幅实时计算，基线为该账户收益曲线首个可用交易日
     - `DailyProfit.dailyProfitAmount` / `DailyProfit.cumulativeProfitAmount` 按当日/累计盈亏（CNY）写入
 - **后台定时快照建议**:
