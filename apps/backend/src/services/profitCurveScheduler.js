@@ -5,6 +5,7 @@ const DailyRevenue = require('../models/DailyRevenue');
 const MonthlyStats = require('../models/MonthlyStats');
 const Snapshot = require('../models/Snapshot');
 const { Trade } = require('../models/Trade');
+const { CorporateAction } = require('../models/CorporateAction');
 const Transfer = require('../models/Transfer');
 const { Asset } = require('../models/Asset');
 const User = require('../models/User');
@@ -414,9 +415,12 @@ class ProfitCurveScheduler {
         if (!asset) continue;
 
         // 获取持仓详情
-        const trades = await Trade.find({ userId: user._id });
+        const [trades, actions] = await Promise.all([
+          Trade.find({ userId: user._id }),
+          CorporateAction.find({ userId: user._id })
+        ]);
         const rates = await getRates();
-        const perfMap = calculateDilutedPerformance({ trades, rates });
+        const perfMap = calculateDilutedPerformance({ trades, actions, rates });
         const holdings = [];
 
         perfMap.forEach((perf, symbol) => {

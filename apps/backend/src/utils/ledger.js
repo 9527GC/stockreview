@@ -1,6 +1,6 @@
 const { round2 } = require('./pnl');
 
-const calculateCashAndPrincipalCNY = ({ transfers, trades, rates }) => {
+const calculateCashAndPrincipalCNY = ({ transfers, trades, actions = [], rates }) => {
   const r = rates || {};
 
   let cash = 0;
@@ -33,8 +33,14 @@ const calculateCashAndPrincipalCNY = ({ transfers, trades, rates }) => {
     }
   });
 
+  (actions || []).forEach(action => {
+    const rate = r[action.currency || 'CNY'] || 1;
+    const amountCNY = (Number(action.cashAmount) || 0) * rate;
+    if (action.type === 'CASH_DIVIDEND') cash += amountCNY;
+    if (action.type === 'RIGHTS_ISSUE') cash -= amountCNY;
+  });
+
   return { cashCNY: round2(cash), principalCNY: round2(principal) };
 };
 
 module.exports = { calculateCashAndPrincipalCNY };
-

@@ -135,10 +135,10 @@
             <a-radio-button value="US">美股</a-radio-button>
           </a-radio-group>
         </div>
-        <a-button @click="showHistoryModal">
+        <div style="display: flex; gap: 8px;"><a-button @click="showCorporateActionModal">公司行动</a-button><a-button @click="showHistoryModal">
           <template #icon><HistoryOutlined /></template>
           查看历史持仓
-        </a-button>
+        </a-button></div>
       </div>
       <a-table
         :columns="columns"
@@ -247,6 +247,7 @@
     <HistoryHoldingsModal v-model:open="isHistoryModalVisible" @deleted="handleHistoryChanged" @changed="handleHistoryChanged" />
     <HoldingDetailModal v-model:open="isHoldingDetailModalVisible" :holding="selectedHolding" @changed="handleHoldingChanged" />
     <TransferModal v-model:open="isTransferModalVisible" @success="handleTransferSuccess" />
+    <CorporateActionModal v-model:open="isCorporateActionModalVisible" @changed="handleCorporateActionChanged" />
     </div>
   </PCLayout>
 </template>
@@ -257,6 +258,7 @@ import PCLayout from '@/layouts/PCLayout.vue';
 import ProfitChart from '@/components/ProfitChart.vue';
 import ProfitCalendar from '@/components/ProfitCalendar.vue';
 import TransferModal from '@/components/TransferModal.vue';
+import CorporateActionModal from '@/components/CorporateActionModal.vue';
 import HistoryHoldingsModal from '@/components/HistoryHoldingsModal.vue';
 import HoldingDetailModal from '@/components/HoldingDetailModal.vue';
 import { useTradeStore } from '@/stores/trade';
@@ -271,6 +273,7 @@ const chartData = ref([]);
 const profitCalendarRef = ref(null);
 const isHistoryModalVisible = ref(false);
 const isTransferModalVisible = ref(false);
+const isCorporateActionModalVisible = ref(false);
 const isHoldingDetailModalVisible = ref(false);
 const dateRange = ref([dayjs().startOf('month'), dayjs()]);
 const dateShortcut = ref('month');
@@ -483,6 +486,16 @@ const showHoldingDetail = (record) => {
 
 const showTransferModal = () => {
   isTransferModalVisible.value = true;
+};
+
+const showCorporateActionModal = () => {
+  isCorporateActionModalVisible.value = true;
+};
+
+const handleCorporateActionChanged = async () => {
+  await store.loadTrades();
+  fetchChartData();
+  profitCalendarRef.value?.fetchCalendarData();
 };
 
 const handleTransferSuccess = (record) => {

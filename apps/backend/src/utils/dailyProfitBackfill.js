@@ -3,6 +3,7 @@ const DailyRevenue = require('../models/DailyRevenue');
 const { Asset } = require('../models/Asset');
 const { Trade } = require('../models/Trade');
 const Transfer = require('../models/Transfer');
+const { CorporateAction } = require('../models/CorporateAction');
 const { getRates } = require('./currency');
 const { getQuotesForRange } = require('./historicalQuoteCache');
 const { calculateCashAndPrincipalCNY } = require('./ledger');
@@ -64,6 +65,33 @@ const applyTradeToHoldings = (holdings, trade) => {
   }
 };
 
+
+const applyCorporateActionToHoldings = (holdings, action) => {
+  const symbol = normalizeSymbol(action.symbol);
+  const holding = holdings.get(symbol);
+  if (!holding) return;
+  const type = String(action.type || '').toUpperCase();
+  const quantityChange = Number(action.quantityChange) || 0;
+  const cashAmount = Number(action.cashAmount) || 0;
+  if (type === 'SPLIT' || type === 'REVERSE_SPLIT') {
+    const numerator = Number(action.ratioNumerator) || 0;
+    const denominator = Number(action.ratioDenominator) || 0;
+    if (numerator > 0 && denominator > 0) {
+      const factor = numerator / denominator;
+      holding.quantity *= factor;
+      holding.avgCost /= factor;
+    }
+  } else if ((type === 'STOCK_DIVIDEND' || type === 'BONUS_ISSUE') && quantityChange > 0) {
+    const totalCost = holding.quantity * holding.avgCost;
+    holding.quantity += quantityChange;
+    holding.avgCost = holding.quantity > 0 ? totalCost / holding.quantity : 0;
+  } else if (type === 'RIGHTS_ISSUE' && quantityChange > 0) {
+    const totalCost = holding.quantity * holding.avgCost + cashAmount;
+    holding.quantity += quantityChange;
+    holding.avgCost = holding.quantity > 0 ? totalCost / holding.quantity : 0;
+  }
+};
+
 /**
  * 统一回填 DailyProfit / DailyRevenue
  * 计算口径：
@@ -85,10 +113,11 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
     return { success: true, updatedCount: 0, skippedCount: 0 };
   }
 
-  const [rates, transfers, tradesAsc] = await Promise.all([
+  const [rates, transfers, tradesAsc, actionsAsc] = await Promise.all([
     getRates(),
     Transfer.find({ userId }).sort({ date: 1 }),
-    Trade.find({ userId }).sort({ date: 1, _id: 1 })
+    Trade.find({ userId }).sort({ date: 1, _id: 1 }),
+    CorporateAction.find({ userId }).sort({ date: 1, _id: 1 })
   ]);
 
   const dateStrOf = (date) => getDateStringInOffset(offsetMinutes, date);
@@ -98,6 +127,7 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
   let principalCNY = 0;
   let prevTotalAssets = null;
   let tradeIndex = 0;
+  let actionIndex = 0;
   let recomputeStartDate = startDateStr;
 
   // 尝试使用 startDateStr 前一天的缓存作为起点，实现增量回填
@@ -113,12 +143,19 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
       tradeIndex++;
     }
 
+    while (actionIndex < actionsAsc.length && dateStrOf(actionsAsc[actionIndex].date) <= prevDateStr) {
+      applyCorporateActionToHoldings(currentHoldings, actionsAsc[actionIndex]);
+      actionIndex++;
+    }
+
     // 截止到前一天的现金与本金
     const upToPrevTransfers = transfers.filter(t => dateStrOf(t.date) <= prevDateStr);
     const upToPrevTrades = tradesAsc.slice(0, tradeIndex);
+    const upToPrevActions = actionsAsc.slice(0, actionIndex);
     const ledger = calculateCashAndPrincipalCNY({
       transfers: upToPrevTransfers,
       trades: upToPrevTrades,
+      actions: upToPrevActions,
       rates
     });
     cashCNY = ledger.cashCNY;
@@ -146,6 +183,13 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
     tradesByDate.get(d).push(trade);
   }
 
+  const actionsByDate = new Map();
+  for (const action of actionsAsc) {
+    const d = dateStrOf(action.date);
+    if (!actionsByDate.has(d)) actionsByDate.set(d, []);
+    actionsByDate.get(d).push(action);
+  }
+
   const transfersByDate = new Map();
   for (const t of transfers) {
     const d = dateStrOf(t.date);
@@ -155,6 +199,9 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
 
   // 收集窗口内所有会用到行情的 symbol
   const symbolsInWindow = new Set(Array.from(currentHoldings.keys()));
+  for (const action of actionsAsc) {
+    symbolsInWindow.add(normalizeSymbol(action.symbol));
+  }
   for (const trade of tradesAsc) {
     symbolsInWindow.add(normalizeSymbol(trade.symbol));
   }
@@ -166,6 +213,16 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
   const dailyRevenues = [];
 
   for (const dateStr of dates) {
+    // 公司行动在当日成交前生效。拆分/送转不改变现金；分红增加现金；配股减少现金。
+    const dayActions = actionsByDate.get(dateStr) || [];
+    for (const action of dayActions) {
+      applyCorporateActionToHoldings(currentHoldings, action);
+      const rate = rates[action.currency || 'CNY'] || 1;
+      const amountCNY = (Number(action.cashAmount) || 0) * rate;
+      if (action.type === 'CASH_DIVIDEND') cashCNY += amountCNY;
+      if (action.type === 'RIGHTS_ISSUE') cashCNY -= amountCNY;
+    }
+
     // 应用当天交易并同步更新现金
     const dayTrades = tradesByDate.get(dateStr) || [];
     for (const trade of dayTrades) {

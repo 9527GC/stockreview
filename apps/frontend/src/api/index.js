@@ -266,3 +266,9 @@ export const uploadAvatar = (filePath) => {
 
 export const createMiniappLoginCode = () => request({ url: '/api/auth/wechat/miniapp-login/create', method: 'POST', silent: true });
 export const getMiniappLoginStatus = (token) => request({ url: '/api/auth/wechat/miniapp-login/status', method: 'GET', params: { token }, silent: true });
+
+// 公司行动：独立于真实成交，保存后会自动重算持仓、现金和收益。
+export const getCorporateActions = () => request({ url: '/api/corporate-actions', method: 'GET' });
+export const createCorporateAction = (data) => request({ url: '/api/corporate-actions', method: 'POST', data });
+export const updateCorporateAction = (id, data) => request({ url: `/api/corporate-actions/${id}`, method: 'PUT', data });
+export const deleteCorporateAction = (id) => request({ url: `/api/corporate-actions/${id}`, method: 'DELETE' });
