@@ -229,6 +229,39 @@ describe('Trade API', () => {
     expect(res.statusCode).toBe(400);
     expect(res.body.message).toContain('Sell quantity exceeds holding quantity');
   });
+  test('补录早于买入日的卖出会被拒绝且不写入非法账本', async () => {
+    const buy = await request(app).post('/api/trades').set('Authorization', `Bearer ${token}`).send({
+      symbol: '600519.SH', type: 'BUY', price: 10, quantity: 100, commission: 0,
+      date: '2026-09-02T09:30:00+08:00', name: '贵州茅台'
+    });
+    expect(buy.statusCode).toBe(201);
+
+    const sell = await request(app).post('/api/trades').set('Authorization', `Bearer ${token}`).send({
+      symbol: '600519.SH', type: 'SELL', price: 10, quantity: 100, commission: 0,
+      date: '2026-09-01T09:30:00+08:00', name: '贵州茅台'
+    });
+
+    expect(sell.statusCode).toBe(400);
+    expect(await Trade.countDocuments({ userId })).toBe(1);
+  });
+
+  test('删除会导致后续卖出超卖的买入时应拒绝删除并保留交易', async () => {
+    const buy = await request(app).post('/api/trades').set('Authorization', `Bearer ${token}`).send({
+      symbol: '600519.SH', type: 'BUY', price: 10, quantity: 100, commission: 0,
+      date: '2026-09-01T09:30:00+08:00', name: '贵州茅台'
+    });
+    const sell = await request(app).post('/api/trades').set('Authorization', `Bearer ${token}`).send({
+      symbol: '600519.SH', type: 'SELL', price: 11, quantity: 100, commission: 0,
+      date: '2026-09-02T09:30:00+08:00', name: '贵州茅台'
+    });
+    expect(buy.statusCode).toBe(201);
+    expect(sell.statusCode).toBe(201);
+
+    const deletion = await request(app).delete(`/api/trades/reviews/${buy.body._id}`).set('Authorization', `Bearer ${token}`);
+
+    expect(deletion.statusCode).toBe(400);
+    expect(await Trade.findById(buy.body._id)).not.toBeNull();
+  });
 });
 
 describe('GET /api/trades/history-holdings', () => {

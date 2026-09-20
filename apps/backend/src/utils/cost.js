@@ -26,6 +26,7 @@ const ensurePosition = (positions, trade) => {
       realizedProfit: 0,
       realizedProfitCNY: 0,
       totalBuyCost: 0,
+      totalBuyCostCNY: 0,
       tradesCount: 0,
       lastTradeDate: null
     });
@@ -49,6 +50,7 @@ const calculateWeightedAveragePerformance = ({ trades, rates = {} }) => {
       position.avgCostCNY = ((position.avgCostCNY * position.quantity) + (amount * fxRate(trade, rates))) / nextQuantity;
       position.quantity = nextQuantity;
       position.totalBuyCost += amount;
+      position.totalBuyCostCNY += amount * fxRate(trade, rates);
       return;
     }
     if (trade.type !== 'SELL') return;
@@ -66,6 +68,7 @@ const calculateWeightedAveragePerformance = ({ trades, rates = {} }) => {
     position.avgCostCNY = round2(position.avgCostCNY);
     position.realizedProfit = round2(position.realizedProfit);
     position.realizedProfitCNY = round2(position.realizedProfitCNY);
+    position.totalBuyCostCNY = round2(position.totalBuyCostCNY);
   });
   return positions;
 };

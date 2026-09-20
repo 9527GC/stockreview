@@ -55,4 +55,14 @@ describe('standard and diluted cost calculations', () => {
     expect(() => calculateWeightedAveragePerformance({ trades })).toThrow('Sell quantity exceeds holding quantity');
     expect(() => calculateClosedPositionCycles({ trades })).toThrow('Sell quantity exceeds holding quantity');
   });
+  test('标准成本累计每笔买入时锁定的 CNY 本金', () => {
+    const trades = [trade('BUY', 100, 2, '2026-09-18T09:30:00+08:00', {
+      symbol: 'AAPL.US', currency: 'USD', fxRateToCNY: 7.2
+    })];
+
+    const performance = calculateWeightedAveragePerformance({ trades, rates: { USD: 7.3 } }).get('AAPL.US');
+
+    expect(performance.totalBuyCost).toBe(200);
+    expect(performance.totalBuyCostCNY).toBe(1440);
+  });
 });

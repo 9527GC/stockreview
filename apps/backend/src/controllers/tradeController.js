@@ -89,41 +89,43 @@ const calculateCommission = ({ price, quantity, feeMode, feeRate, feeAmount, com
  * 校验编辑某条交易的数量后，全账本是否会出现超卖
  * @returns {Promise<{valid: boolean, message?: string}>}
  */
+const validateLedgerTrades = (trades) => {
+  const holdings = new Map();
+  const ordered = [...trades].sort((a, b) => {
+    const byDate = new Date(a.date) - new Date(b.date);
+    return byDate || String(a._id || '').localeCompare(String(b._id || ''));
+  });
+
+  for (const trade of ordered) {
+    const symbol = normalizeSymbol(trade.symbol);
+    const quantity = Number(trade.quantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) return { valid: false, message: messages.QUANTITY_MUST_BE_POSITIVE };
+    if (trade.type === 'BUY') {
+      holdings.set(symbol, (holdings.get(symbol) || 0) + quantity);
+      continue;
+    }
+    if (trade.type !== 'SELL') continue;
+    const current = holdings.get(symbol) || 0;
+    if (quantity > current) {
+      return { valid: false, message: messages.QUANTITY_EXCEEDS_HOLDING_AT_DATE(trade.name, symbol, new Date(trade.date).toISOString(), current) };
+    }
+    holdings.set(symbol, current - quantity);
+  }
+  return { valid: true };
+};
+
+const validateCandidateLedger = async ({ userId, candidateTrade, excludedTradeId }) => {
+  const trades = await Trade.find({ userId }).lean();
+  const candidateTrades = trades.filter((trade) => String(trade._id) !== String(excludedTradeId));
+  if (candidateTrade) candidateTrades.push(candidateTrade.toObject ? candidateTrade.toObject() : candidateTrade);
+  return validateLedgerTrades(candidateTrades);
+};
+
 const validateTradeEditQuantity = async ({ userId, editedTradeId, updates }) => {
   if (updates.quantity === undefined) return { valid: true };
-
-  const trades = await Trade.find({ userId }).sort({ date: 1 }).lean();
-  const holdings = new Map();
-
-  for (const t of trades) {
-    const isEditing = String(t._id) === String(editedTradeId);
-    const type = isEditing && updates.type ? String(updates.type).toUpperCase() : t.type;
-    const qty = isEditing && updates.quantity !== undefined ? Number(updates.quantity) : Number(t.quantity);
-
-    if (!Number.isFinite(qty) || qty <= 0) {
-      return { valid: false, message: messages.QUANTITY_MUST_BE_POSITIVE };
-    }
-
-    if (type === 'BUY') {
-      holdings.set(t.symbol, (holdings.get(t.symbol) || 0) + qty);
-    } else if (type === 'SELL') {
-      const current = holdings.get(t.symbol) || 0;
-      if (qty > current) {
-        return {
-          valid: false,
-          message: messages.QUANTITY_EXCEEDS_HOLDING_AT_DATE(
-            t.name,
-            t.symbol,
-            t.date.toISOString(),
-            current
-          )
-        };
-      }
-      holdings.set(t.symbol, current - qty);
-    }
-  }
-
-  return { valid: true };
+  const trade = await Trade.findOne({ _id: editedTradeId, userId }).lean();
+  if (!trade) return { valid: false, message: messages.TRADE_NOT_FOUND };
+  return validateCandidateLedger({ userId, excludedTradeId: editedTradeId, candidateTrade: { ...trade, ...updates } });
 };
 
 const rebuildAssetFromLedger = async (userId) => {
@@ -301,7 +303,7 @@ exports.getHoldings = async (req, res) => {
       const dilutedUnrealizedProfit = diluted
         ? calculateDilutedProfits({ currentPrice, quantity: h.quantity, avgCost: diluted.dilutedAvgCost, rate }).unrealizedProfit
         : null;
-      const totalInvestmentCNY = (perf?.totalBuyCost || 0) * rate;
+      const totalInvestmentCNY = perf?.totalBuyCostCNY || 0;
       profitRate = cumulativeProfit !== null
         ? parseFloat((totalInvestmentCNY > 0 ? (cumulativeProfit / totalInvestmentCNY) : 0).toFixed(4))
         : null;
@@ -618,10 +620,10 @@ exports.getHistoryHoldings = async (req, res) => {
       const av = getKey(a);
       const bv = getKey(b);
       if (av === bv) {
-        const ad = a.lastTradeDate ? new Date(a.lastTradeDate).getTime() : 0;
-        const bd = b.lastTradeDate ? new Date(b.lastTradeDate).getTime() : 0;
-        if (ad === bd) return a.symbol.localeCompare(b.symbol);
-        return bd - ad;
+        const ad = a.closedAt ? new Date(a.closedAt).getTime() : 0;
+        const bd = b.closedAt ? new Date(b.closedAt).getTime() : 0;
+        if (ad === bd) return a.cycleId.localeCompare(b.cycleId);
+        return desc ? (bd - ad) : (ad - bd);
       }
       return desc ? (bv - av) : (av - bv);
     });
@@ -904,6 +906,8 @@ exports.addTrade = async (req, res) => {
       cognitiveBias: cognitiveBias === undefined ? null : String(cognitiveBias).trim() || null,
       improvementMeasures: improvementMeasures === undefined ? null : String(improvementMeasures).trim() || null
     });
+    const ledgerValidation = await validateCandidateLedger({ userId: req.user._id, candidateTrade: trade });
+    if (!ledgerValidation.valid) return res.status(400).json({ message: ledgerValidation.message });
     await trade.save();
 
     // 基于全量账本重建资产与持仓，避免手动更新与重建结果不一致
@@ -1145,12 +1149,15 @@ exports.deleteTradeById = async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: 'Invalid trade id' });
     }
-    const trade = await Trade.findOneAndDelete({ _id: id, userId: req.user._id });
+    const trade = await Trade.findOne({ _id: id, userId: req.user._id });
 
     if (!trade) {
       return res.status(404).json({ message: messages.TRADE_NOT_FOUND });
     }
-    
+    const ledgerValidation = await validateCandidateLedger({ userId: req.user._id, excludedTradeId: trade._id });
+    if (!ledgerValidation.valid) return res.status(400).json({ message: ledgerValidation.message });
+    await Trade.deleteOne({ _id: trade._id, userId: req.user._id });
+
     await rebuildAssetFromLedger(req.user._id);
     await upsertTodayDailyProfit(req.user._id);
 
