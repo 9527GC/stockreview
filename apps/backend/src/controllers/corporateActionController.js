@@ -1,6 +1,6 @@
 const { CorporateAction, ACTION_TYPES } = require('../models/CorporateAction');
 const { normalizeSymbol } = require('../utils/symbol');
-const { parseDateInOffset } = require('../utils/datetime');
+const { getDateStringInOffset, parseDateInOffset } = require('../utils/datetime');
 const { rebuildAssetFromLedger } = require('./tradeController');
 const dirtyDataManager = require('../services/dirtyDataManager');
 
@@ -19,7 +19,7 @@ const validate = (body) => {
   if (['SPLIT', 'REVERSE_SPLIT'].includes(type) && (!(ratioNumerator > 0) || !(ratioDenominator > 0))) return { error: '拆分比例必须为正数' };
   if (type === 'CASH_DIVIDEND' && cashAmount <= 0) return { error: '现金分红金额必须大于 0' };
   if (type === 'RIGHTS_ISSUE' && (quantityChange <= 0 || cashAmount <= 0)) return { error: '配股必须填写正的份额和现金支出' };
-  return { value: { symbol, name: String(body.name).trim(), type, date, currency: body.currency || 'CNY', cashAmount, quantityChange, ratioNumerator, ratioDenominator, sourceId: String(body.sourceId || '').trim(), sourceFile: body.sourceFile || null, remark: body.remark || null } };
+  return { value: { symbol, name: String(body.name).trim(), type, date, dateKey: getDateStringInOffset(480, date), currency: body.currency || 'CNY', cashAmount, quantityChange, ratioNumerator, ratioDenominator, sourceFile: body.sourceFile || null, remark: body.remark || null } };
 };
 
 const recalc = async (userId, date) => {
@@ -36,10 +36,9 @@ exports.list = async (req, res) => {
 exports.create = async (req, res) => {
   try {
     const parsed = validate(req.body); if (parsed.error) return res.status(400).json({ message: parsed.error });
-    if (!parsed.value.sourceId) return res.status(400).json({ message: '来源标识不能为空，用于防止重复导入' });
     const action = await CorporateAction.create({ userId: req.user._id, ...parsed.value });
     await recalc(req.user._id, action.date); res.status(201).json(action);
-  } catch (error) { res.status(error?.code === 11000 ? 409 : 500).json({ message: error?.code === 11000 ? '该来源公司行动已导入' : error.message }); }
+  } catch (error) { res.status(error?.code === 11000 ? 409 : 500).json({ message: error?.code === 11000 ? '同一证券在同一日期只能新增一条公司行动' : error.message }); }
 };
 exports.update = async (req, res) => {
   try { const parsed = validate(req.body); if (parsed.error) return res.status(400).json({ message: parsed.error });
@@ -49,6 +48,7 @@ exports.update = async (req, res) => {
     const firstAffectedDate = previous.date < action.date ? previous.date : action.date;
     await recalc(req.user._id, firstAffectedDate);
     res.json(action);
-  } catch (error) { res.status(error?.code === 11000 ? 409 : 500).json({ message: error?.code === 11000 ? '该来源公司行动已导入' : error.message }); }
+  } catch (error) { res.status(error?.code === 11000 ? 409 : 500).json({ message: error?.code === 11000 ? '同一证券在同一日期只能新增一条公司行动' : error.message }); }
 };
 exports.remove = async (req, res) => { try { const action = await CorporateAction.findOneAndDelete({ _id: req.params.id, userId: req.user._id }); if (!action) return res.status(404).json({ message: '公司行动不存在' }); await recalc(req.user._id, action.date); res.json({ id: action._id }); } catch (error) { res.status(500).json({ message: error.message }); } };
+

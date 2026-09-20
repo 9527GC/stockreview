@@ -42,7 +42,7 @@ describe('公司行动 API', () => {
 
     const res = await request(app).post('/api/corporate-actions').set(auth()).send({
       symbol: '159516.SZ', name: '半导体设备ETF国泰', type: 'SPLIT', currency: 'CNY', date: '2026-04-10',
-      ratioNumerator: 2, ratioDenominator: 1, sourceId: '腾讯自选股-159516-20260410-拆分'
+      ratioNumerator: 2, ratioDenominator: 1
     });
 
     expect(res.statusCode).toBe(201);
@@ -52,13 +52,13 @@ describe('公司行动 API', () => {
     expect(await Trade.countDocuments({ userId, symbol: '159516.SZ' })).toBe(1);
   });
 
-  test('相同来源的公司行动拒绝重复导入', async () => {
+  test('同一证券同一日期的公司行动拒绝重复新增', async () => {
     const payload = {
       symbol: '00700.HK', name: '腾讯控股', type: 'CASH_DIVIDEND', currency: 'HKD', date: '2026-05-20',
-      cashAmount: 120, sourceId: '腾讯自选股-00700-20260520-分红'
+      cashAmount: 120
     };
     const first = await request(app).post('/api/corporate-actions').set(auth()).send(payload);
-    const duplicate = await request(app).post('/api/corporate-actions').set(auth()).send(payload);
+    const duplicate = await request(app).post('/api/corporate-actions').set(auth()).send({ ...payload, type: 'STOCK_DIVIDEND', quantityChange: 10 });
     expect(first.statusCode).toBe(201);
     expect(duplicate.statusCode).toBe(409);
   });
@@ -66,7 +66,7 @@ describe('公司行动 API', () => {
   test('更新与删除会重新计算', async () => {
     const created = await request(app).post('/api/corporate-actions').set(auth()).send({
       symbol: '600000.SH', name: '浦发银行', type: 'CASH_DIVIDEND', currency: 'CNY', date: '2026-06-01',
-      cashAmount: 10, sourceId: '腾讯自选股-600000-20260601-分红'
+      cashAmount: 10
     });
     expect(created.statusCode).toBe(201);
 
@@ -85,3 +85,4 @@ describe('公司行动 API', () => {
     expect(await CorporateAction.countDocuments({ userId })).toBe(0);
   });
 });
+
