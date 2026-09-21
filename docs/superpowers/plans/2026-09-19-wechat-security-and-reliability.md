@@ -16,7 +16,7 @@
 - 保留当前工作区已有未提交改动；禁止执行 `git reset`、`git clean` 或覆盖无关文件。
 - 每项行为变更先新增或修改能够复现问题的自动化测试，先观察失败，再写最小实现。
 - 本轮不执行 `npm audit fix --force`，不将 DCloud / uni-app 大版本升级混入功能安全修复。
-- 正式小程序 API 域名使用 `https://stock.gc9527.com`，测试环境使用 `https://test-stock.gc9527.com`。
+- 小程序统一使用生产 API 域名 `https://stock.gc9527.com`；本地开发数据库与生产部署是仅有的两个环境。
 
 ---
 
@@ -93,7 +93,7 @@
 - 修改：`apps/miniapp/README.md`
 
 **接口：**
-- `config/env.js` 根据 `globalThis.__MINIAPP_ENV__`（默认 production）导出 `API_BASE_URL`；`staging` 仅在显式指定时使用测试域名。
+- `config/env.js` 固定导出生产 API `API_BASE_URL`；本地开发不再维护独立小程序测试环境。
 - `safeDecodeURIComponent(value)` 对非法 percent 编码返回空字符串，不能从 `onLoad` 抛出异常。
 - 合法 `scene=login_<token>` 仍调用 `confirmLogin(token)`；缺失或非法 scene 仍转入 `checkCurrentBinding()`。
 

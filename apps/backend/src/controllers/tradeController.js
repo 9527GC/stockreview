@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const { Trade, Holding } = require('../models/Trade');
+const CompanyAction = require('../models/CompanyAction');
 const { Asset } = require('../models/Asset');
 const User = require('../models/User');
 const Transfer = require('../models/Transfer');
@@ -448,9 +449,10 @@ exports.getCurrentHoldingTrades = async (req, res) => {
       userId: String(userId)
     });
 
-    const [rates, trades] = await Promise.all([
+    const [rates, trades, companyActions] = await Promise.all([
       getRates(),
-      Trade.find({ userId, symbol: { $in: symbolSet } }).sort({ date: 1, _id: 1 }).lean()
+      Trade.find({ userId, symbol: { $in: symbolSet } }).sort({ date: 1, _id: 1 }).lean(),
+      CompanyAction.find({ userId, symbol: { $in: symbolSet } }).sort({ date: 1, _id: 1 }).lean()
     ]);
 
     console.log('[getCurrentHoldingTrades] matched trades count:', trades.length);
@@ -486,10 +488,12 @@ exports.getCurrentHoldingTrades = async (req, res) => {
     }
 
     const currentBatchTrades = currentBatchStartIndex === -1 ? [] : sortedTrades.slice(currentBatchStartIndex);
+    const batchStartDate = currentBatchTrades[0]?.date ? new Date(currentBatchTrades[0].date) : null;
+    const visibleActions = companyActions.filter(a => !batchStartDate || new Date(a.date) >= batchStartDate);
 
-    console.log('[getCurrentHoldingTrades] current batch count:', currentBatchTrades.length, 'runningQty:', runningQty);
+    console.log('[getCurrentHoldingTrades] current batch count:', currentBatchTrades.length, 'actions:', visibleActions.length, 'runningQty:', runningQty);
 
-    const list = currentBatchTrades.map(t => {
+    const tradeList = currentBatchTrades.map(t => {
       const snapshotView = getTradeSnapshotView(t);
       return {
         id: t._id,
@@ -517,6 +521,9 @@ exports.getCurrentHoldingTrades = async (req, res) => {
         news: t.news ?? null
       };
     });
+
+    const actionList = visibleActions.map(a => ({ id: String(a._id), symbol: a.symbol, name: a.name, stockName: a.name, date: a.date, type: 'COMPANY_ACTION', actionType: a.type, description: a.description, quantityChange: a.quantityChange || 0, cashAmount: a.cashAmount || 0, currency: a.currency || 'CNY', price: null, quantity: a.quantityChange || 0, commission: 0, logic: a.description }));
+    const list = [...tradeList, ...actionList].sort((a, b) => new Date(a.date) - new Date(b.date));
 
     res.json({ list, total: list.length });
   } catch (error) {

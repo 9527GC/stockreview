@@ -15,6 +15,7 @@ const refreshAssetMarketValue = async (userId) => {
 
   const priceUpdates = [];
   let holdingsMarketValue = 0;
+  const missingPriceSymbols = [];
 
   holdings.forEach((holding) => {
     let currentPrice = null;
@@ -36,7 +37,14 @@ const refreshAssetMarketValue = async (userId) => {
       currentPrice = holding.lastPrice;
     }
 
-    const marketValue = currentPrice !== null ? holding.quantity * currentPrice : 0;
+    // Never treat an unavailable quote as a zero-price position. A zero here
+    // would erase the position's market value and create a false loss.
+    if (currentPrice === null) {
+      missingPriceSymbols.push(holding.symbol);
+      return;
+    }
+
+    const marketValue = holding.quantity * currentPrice;
     const rate = rates[holding.currency] || 1;
     holdingsMarketValue += marketValue * rate;
   });
@@ -48,6 +56,13 @@ const refreshAssetMarketValue = async (userId) => {
   let asset = await Asset.findOne({ userId });
   if (!asset) {
     asset = new Asset({ userId, cash: 0, currentPrincipal: 0 });
+  }
+
+  // Keep the last valid aggregate snapshot until every holding can be priced.
+  // This prevents a partial market-data response from overwriting totalAssets.
+  if (missingPriceSymbols.length > 0) {
+    console.warn(`[AssetSnapshot] Incomplete quotes for ${userId}: ${missingPriceSymbols.join(', ')}`);
+    return asset;
   }
 
   asset.holdingsMarketValue = round2(holdingsMarketValue);

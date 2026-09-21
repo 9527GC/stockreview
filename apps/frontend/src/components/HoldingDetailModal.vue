@@ -89,17 +89,18 @@
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'type'">
-                <a-tag :color="record.type === 'BUY' ? 'red' : 'green'">
+                <a-tag v-if="record.type === 'COMPANY_ACTION'" color="purple">公司行动</a-tag>
+                <a-tag v-else :color="record.type === 'BUY' ? 'red' : 'green'">
                   {{ record.type === 'BUY' ? '买入' : '卖出' }}
                 </a-tag>
               </template>
               <template v-if="column.key === 'price'">
-                {{ currencySymbol }}{{ Number(record.price || 0).toFixed(2) }}
+                <span v-if="record.type === 'COMPANY_ACTION'">{{ record.description || '--' }}</span><span v-else>{{ currencySymbol }}{{ Number(record.price || 0).toFixed(2) }}</span>
               </template>
               <template v-if="column.key === 'date'">
                 {{ dayjs(record.date).format('YYYY-MM-DD HH:mm') }}
               </template>
-              <template v-if="column.key === 'action'">
+              <template v-if="column.key === 'action' && record.type !== 'COMPANY_ACTION'">
                 <a-button type="link" size="small" @click="handleEdit(record)">编辑</a-button>
                 <a-popconfirm
                   title="确定要删除这条交易记录吗？"

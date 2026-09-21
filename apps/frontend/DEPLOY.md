@@ -6,6 +6,8 @@
 
 ```bash
 cd apps/frontend
+cp .env.production.example .env.production
+# Confirm .env.production uses https://stock.gc9527.com, never test-stock.gc9527.com
 rm -rf dist
 npm run build:h5
 ```

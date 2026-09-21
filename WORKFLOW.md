@@ -11,20 +11,19 @@
 
 ## 当前部署约定
 
-测试、生产环境统一以阿里云实际运行环境为准。项目不依赖旧平台 Devbox、旧平台内网 DNS 或固定的云平台项目路径。
+项目只有两个环境：本地开发环境和生产环境。生产环境的后端、H5 前端和 MongoDB 均部署在阿里云；不再使用测试、预发布、staging 环境，也不依赖旧平台 Devbox、旧平台内网 DNS、Sealos/Kubernetes 服务名或固定云平台项目路径。
 
 部署前必须确认：
 
-- 目标服务器/容器的项目目录
-- 阿里云 MongoDB URI 与网络白名单
-- `NODE_ENV` 和对应环境文件
+- 本地开发环境连接本机 MongoDB；生产环境连接阿里云生产 MongoDB
+- 目标阿里云服务器/容器的项目目录和网络连通性
+- `NODE_ENV` 与对应环境文件：本地使用 development，生产使用 production
 - Nginx/负载均衡的 HTTPS 与反向代理配置
-- `CORS_ORIGINS` 包含实际前端域名
-- 微信小程序 AppID、AppSecret 已通过安全的环境变量注入
+- 生产 `CORS_ORIGINS` 包含 `https://stock.gc9527.com`
+- 微信小程序使用生产 AppID/AppSecret，生成正式二维码时使用 `release`
 
 ## 安全要求
 
 - `.env.*` 中的真实密码、密钥和 Token 不得提交到 Git。
-- 生产数据库与测试数据库必须隔离。
+- 本地开发数据库与生产数据库必须隔离；生产环境只能使用阿里云生产实例对应的 `MONGODB_URI`。
 - 远程部署完成后应重启后端并检查健康接口、登录、微信绑定和扫码登录流程。
-

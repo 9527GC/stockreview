@@ -98,10 +98,13 @@ exports.getProfitCurve = async (req, res) => {
     const firstDataDate = curveDates[0];
     const lastDataDate = curveDates[curveDates.length - 1];
 
-    // 以所选范围起点前一日的总资产为归一化基准；若起点就是第一条数据日，
-    // 没有前一日记录，则用本金（总资产 - 累计盈亏）作为基准。
+    // 收益曲线必须使用“收益”口径，而不是直接用总资产归一化。
+    // 总资产包含转入/转出资金，直接绘制 totalAssets 会把现金流误显示成
+    // 突然暴涨/暴跌。DailyProfit.cumulativeProfitAmount 已在回填时剔除资金流，
+    // 因此以区间起点前一日的累计盈亏作为收益基准。
     const baselineDate = effectiveStart || firstDataDate || effectiveEnd;
     let rangeStartTotalAssets = null;
+    let rangeStartCumulativeProfit = 0;
     if (baselineDate) {
       const prevDateStr = new Date(Date.parse(baselineDate) - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
       const startRecord = await DailyProfit.findOne({
@@ -110,10 +113,14 @@ exports.getProfitCurve = async (req, res) => {
       }).sort({ date: -1 });
 
       if (startRecord) {
-        rangeStartTotalAssets = startRecord.totalAssets;
+        rangeStartTotalAssets = Number(startRecord.totalAssets) || 0;
+        rangeStartCumulativeProfit = Number(startRecord.cumulativeProfitAmount) || 0;
       } else if (firstDataDate) {
         const firstRecord = data[0];
-        rangeStartTotalAssets = (firstRecord?.totalAssets ?? 0) - (firstRecord?.cumulativeProfitAmount ?? 0);
+        rangeStartTotalAssets = (Number(firstRecord?.totalAssets) || 0) - (Number(firstRecord?.cumulativeProfitAmount) || 0);
+        // The first record is the first available profit point, so its prior
+        // cumulative profit is zero (or the principal-based baseline).
+        rangeStartCumulativeProfit = 0;
       }
     }
 
@@ -136,7 +143,7 @@ exports.getProfitCurve = async (req, res) => {
       benchmarkSymbol: benchmarkCurve.benchmarkSymbol,
       data: data.map(d => {
         const normalizedValue = (rangeStartTotalAssets > 0)
-          ? Number(((((d.totalAssets || 0) / rangeStartTotalAssets) - 1) * 100).toFixed(4))
+          ? Number((((Number(d.cumulativeProfitAmount) || 0) - rangeStartCumulativeProfit) / rangeStartTotalAssets * 100).toFixed(4))
           : null;
         return {
           date: d.date,

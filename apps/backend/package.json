@@ -9,7 +9,7 @@
     "dev": "node src/index.js",
     "snapshot:profit-history": "node scripts/snapshot_profit_history.js",
     "lint": "eslint src/",
-    "test": "jest --runInBand --forceExit",
+    "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --runInBand --forceExit",
     "audit": "npm audit"
   },
   "keywords": [],

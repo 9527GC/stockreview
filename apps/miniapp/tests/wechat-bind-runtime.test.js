@@ -6,6 +6,7 @@ const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
 const pageSource = fs.readFileSync(path.join(root, 'pages/wechat-bind/index.js'), 'utf8');
+const envPath = path.join(root, 'config/env.js');
 
 const loadPage = () => {
   let definition;
@@ -26,16 +27,9 @@ const createContext = () => ({
   confirmLogin(token) { this.confirmedToken = token; }
 });
 
-test('小程序环境配置默认生产域名，staging 明确使用测试域名', () => {
-  const envPath = path.join(root, 'config/env.js');
+test('小程序统一使用生产 API 域名', () => {
   delete require.cache[require.resolve(envPath)];
-  delete globalThis.__MINIAPP_ENV__;
   assert.equal(require(envPath).API_BASE_URL, 'https://stock.gc9527.com');
-
-  globalThis.__MINIAPP_ENV__ = 'staging';
-  delete require.cache[require.resolve(envPath)];
-  assert.equal(require(envPath).API_BASE_URL, 'https://test-stock.gc9527.com');
-  delete globalThis.__MINIAPP_ENV__;
 });
 
 test('非法 scene 参数不会令小程序页面崩溃', () => {

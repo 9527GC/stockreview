@@ -7,6 +7,7 @@ const { Asset } = require('../src/models/Asset');
 const DailyRevenue = require('../src/models/DailyRevenue');
 const DailyProfit = require('../src/models/DailyProfit');
 const HistoricalQuote = require('../src/models/HistoricalQuote');
+const { upsertTodayDailyProfit, getDateStringInOffset } = require('../src/utils/dailyProfitBackfill');
 
 // 避免测试期间调用外部行情接口
 jest.mock('../src/utils/currency', () => ({
@@ -68,9 +69,32 @@ beforeEach(async () => {
   await Holding.deleteMany({ userId });
   await Asset.deleteMany({ userId });
   await DailyRevenue.deleteMany({ userId });
+  await DailyProfit.deleteMany({ userId });
 });
 
 describe('DailyProfit 历史回填', () => {
+  test('没有昨日资产快照时，不应把累计盈亏写成今日收益', async () => {
+    const totalAssets = 371152.10;
+    const principal = 291350.47;
+    const today = getDateStringInOffset(480);
+
+    await Asset.create({
+      userId,
+      totalAssets,
+      currentPrincipal: principal,
+      cash: totalAssets,
+      holdingsMarketValue: 0
+    });
+
+    await upsertTodayDailyProfit(userId);
+
+    const todayRevenue = await DailyRevenue.findOne({ userId, date: today }).lean();
+    expect(todayRevenue).toBeTruthy();
+    expect(todayRevenue.revenue).toBe(0);
+    expect(todayRevenue.returnRate).toBe(0);
+    expect(todayRevenue.cumulativeRevenue).toBeCloseTo(totalAssets - principal, 2);
+  });
+
   test('补录前天买入再补录昨天卖出清仓后，今日收益应为 0，昨日收益为股票收益', async () => {
     const today = new Date();
     const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);

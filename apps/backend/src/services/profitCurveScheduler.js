@@ -15,6 +15,7 @@ const { calculateDilutedPerformance } = require('../utils/cost');
 const { round2 } = require('../utils/pnl');
 const { normalizeSymbol } = require('../utils/symbol');
 const moment = require('moment');
+const { backfillDailyProfit } = require('../utils/dailyProfitBackfill');
 
 /**
  * 收益曲线计算服务
@@ -86,7 +87,10 @@ class ProfitCurveScheduler {
       // 3. 为每个用户计算收益数据
       for (const user of users) {
         try {
-          await this.calculateUserDailyProfit(user._id, yesterday);
+          // Rebuild from the ledger so historical total assets use each day's
+          // trades, transfers, and quotes. The legacy calculator uses the
+          // current asset snapshot for every date and can create false spikes.
+          await backfillDailyProfit(user._id, yesterday);
         } catch (error) {
           console.error(`[Scheduler] Error calculating profit for user ${user._id}:`, error.message);
         }
@@ -479,7 +483,7 @@ class ProfitCurveScheduler {
       // 计算所有用户收益
       const users = await User.find({}).select('_id');
       for (const user of users) {
-        await this.calculateUserDailyProfit(user._id, date);
+        await backfillDailyProfit(user._id, date);
       }
 
       // 更新月度统计

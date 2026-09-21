@@ -10,7 +10,7 @@ if (nodeEnv !== 'test') {
   // 开发环境可回退到 .env，生产环境必须存在专属环境文件
   // 防止 .env.production 未入 Git 导致另一台机器部署时误用本地数据库
   if (!fs.existsSync(envPath)) {
-    if (nodeEnv === 'production' || nodeEnv === 'staging') {
+    if (nodeEnv === 'production') {
       console.error(`[FATAL] 生产环境文件 ${envFile} 不存在，请手动创建并配置正确的 MONGODB_URI 等环境变量。该文件不被 Git 管理，拉取仓库后不会自动存在。`);
       process.exit(1);
     } else {
@@ -51,6 +51,7 @@ const userRoutes = require('./routes/userRoutes');
 const assetRoutes = require('./routes/assetRoutes');
 const tradeRoutes = require('./routes/tradeRoutes');
 const transferRoutes = require('./routes/transferRoutes');
+const companyActionRoutes = require('./routes/companyActionRoutes');
 const marketRoutes = require('./routes/marketRoutes');
 const { startProfitHistoryScheduler } = require('./jobs/profitHistoryScheduler');
 const { startMarketSnapshotScheduler } = require('./jobs/marketSnapshotScheduler');
@@ -141,6 +142,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/assets', assetRoutes);
 app.use('/api/trades', tradeRoutes);
 app.use('/api/transfers', transferRoutes);
+app.use('/api/company-actions', companyActionRoutes);
 app.use('/api/market', marketRoutes);
 
 // Catch-all route for 404
@@ -196,7 +198,3 @@ mongoose.connect(process.env.MONGODB_URI)
   });
 
 module.exports = app;
-
-
-
-

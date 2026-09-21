@@ -164,16 +164,35 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
 
   const dailyProfits = [];
   const dailyRevenues = [];
+  // Non-trading days have no quote. Carry the last valid close forward
+  // instead of falling back to cost every day, which creates weekend troughs.
+  const lastKnownPrices = new Map();
 
   for (const dateStr of dates) {
     // 应用当天交易并同步更新现金
     const dayTrades = tradesByDate.get(dateStr) || [];
+    const dayQuotes = quoteMap.get(dateStr) || {};
     for (const trade of dayTrades) {
-      applyTradeToHoldings(currentHoldings, trade);
+      const symbol = normalizeSymbol(trade.symbol);
+      const existing = currentHoldings.get(symbol);
+      const quotePrice = Number(dayQuotes[symbol]?.close ?? dayQuotes[symbol]?.preClose);
+      const recordedPrice = Number(trade.price);
+      // 部分清仓/导入交易会把成交价写成 0。不能把这种交易当成
+      // 零元成交，否则清仓当天会凭空损失整笔持仓市值。
+      const effectivePrice = Number.isFinite(recordedPrice) && recordedPrice > 0
+        ? recordedPrice
+        : (Number.isFinite(quotePrice) && quotePrice > 0
+          ? quotePrice
+          : (Number(existing?.avgCost) || 0));
+      const effectiveTrade = effectivePrice === recordedPrice
+        ? trade
+        : { ...trade, price: effectivePrice };
+
+      applyTradeToHoldings(currentHoldings, effectiveTrade);
 
       const currency = trade.currency || 'CNY';
       const rate = rates[currency] || 1;
-      const tradeAmountCNY = (Number(trade.price) || 0) * (Number(trade.quantity) || 0) * rate;
+      const tradeAmountCNY = effectivePrice * (Number(trade.quantity) || 0) * rate;
       const commissionCNY = (Number(trade.commission) || 0) * rate;
 
       if (trade.type === 'BUY') {
@@ -216,9 +235,12 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
 
         let price = quote?.close || quote?.preClose || null;
 
-        // 历史行情缺失时，用持仓成本兜底，避免把缺失算成暴跌到 0
-        if (price === null || price <= 0) {
-          price = holding.avgCost || 0;
+        if (price !== null && price > 0) {
+          lastKnownPrices.set(symbol, price);
+        } else {
+          // 周末/节假日没有行情，沿用最近一个交易日收盘价；
+          // 只有从未拿到过历史行情时才使用成本价兜底。
+          price = lastKnownPrices.get(symbol) || holding.avgCost || 0;
           missingQuoteSymbols.push(symbol);
         }
 
@@ -341,8 +363,11 @@ const upsertTodayDailyProfit = async (userId, offsetMinutes = DEFAULT_OFFSET_MIN
 
   const yesterdayStr = new Date(Date.parse(dateStr) - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const yesterdayProfit = await DailyProfit.findOne({ userId, date: yesterdayStr });
-  const yesterdayTotalAssets = yesterdayProfit ? Number(yesterdayProfit.totalAssets) : principal;
+  const yesterdayTotalAssets = Number(yesterdayProfit?.totalAssets);
+  const hasYesterdaySnapshot = Number.isFinite(yesterdayTotalAssets) && yesterdayTotalAssets > 0;
 
+  // 没有昨日资产快照时无法计算单日盈亏。不能以本金兜底，
+  // 否则会将“总资产 - 本金”的累计盈亏错误地记为今日收益。
   // 今日资金转入转出不属于投资收益，需要从当日盈亏中剔除
   const todayStart = parseDateInOffset(`${dateStr} 00:00:00`, offsetMinutes);
   const tomorrowStart = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
@@ -358,8 +383,12 @@ const upsertTodayDailyProfit = async (userId, offsetMinutes = DEFAULT_OFFSET_MIN
     return sum + (t.type === 'IN' ? amountCNY : -amountCNY);
   }, 0));
 
-  const dailyProfitAmount = yesterdayTotalAssets > 0 ? round2(totalAssets - yesterdayTotalAssets - transferFlow) : 0;
-  const dailyReturn = yesterdayTotalAssets > 0 ? round2((dailyProfitAmount / yesterdayTotalAssets) * 100) : 0;
+  const dailyProfitAmount = hasYesterdaySnapshot
+    ? round2(totalAssets - yesterdayTotalAssets - transferFlow)
+    : 0;
+  const dailyReturn = hasYesterdaySnapshot
+    ? round2((dailyProfitAmount / yesterdayTotalAssets) * 100)
+    : 0;
   const cumulativeReturn = principal > 0 ? round2(((totalAssets - principal) / principal) * 100) : 0;
   const cumulativeProfitAmount = round2(totalAssets - principal);
 

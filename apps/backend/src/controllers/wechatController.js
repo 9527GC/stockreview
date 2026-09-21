@@ -155,6 +155,7 @@ exports.bindMiniappWechat = async (req, res) => {
     );
     if (!session) {
       const existingSession = await WechatBindSession.findOne({ tokenHash }).lean();
+
       if (!existingSession || existingSession.expiresAt <= now) {
         return res.status(410).json({ message: '二维码已过期，请返回网页重新生成' });
       }

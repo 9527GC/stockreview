@@ -13,8 +13,17 @@
 
 - 前端：uni-app 3、Vue 3、Vite、Pinia
 - 后端：Node.js 20、Express 5、Mongoose 8、JWT
-- 数据库：MongoDB 7+
-- 部署：阿里云 ECS/容器 + Nginx（具体方式以目标环境为准）
+- 数据库：本地开发使用本机 MongoDB；生产使用阿里云 MongoDB
+- 部署：生产环境的后端、前端和数据库统一部署在阿里云
+
+## 环境约定
+
+项目只有两个环境：
+
+- **本地开发环境**：本机启动前后端，连接本机 MongoDB；
+- **生产环境**：阿里云服务器运行后端和 H5 前端，连接阿里云生产 MongoDB，域名为 `https://stock.gc9527.com`。
+
+项目不再使用测试、预发布或 staging 环境，不再使用 `test-stock.gc9527.com`、测试数据库或测试小程序凭证。
 
 ## 快速开始
 
@@ -23,15 +32,16 @@
 ```bash
 cd apps/backend
 cp .env.production.example .env.development
+# 将 .env.development 中的 MONGODB_URI 改为本机 MongoDB 连接串
 npm install
 npm run dev
-# 生产环境：配置 .env.production 后执行
-npm run start:prod
 ```
 
-生产启动脚本会使用脚本所在目录作为项目目录，不依赖固定的云平台路径：
+生产环境在阿里云配置 `.env.production` 后执行：
 
 ```bash
+npm run start:prod
+# 或
 ./entrypoint.sh prod
 ```
 
@@ -45,18 +55,20 @@ npm run build:h5
 npm run test
 ```
 
+前端本地开发使用 `.env.development`，生产构建使用 `.env.production`；两者只区分本地开发和生产，不再提供 staging 构建模式。
+
 ### 小程序
 
-使用微信开发者工具打开 `apps/miniapp`，配置小程序 AppID 后编译、预览或上传。测试环境的 `WECHAT_MINIAPP_ENV_VERSION` 应使用 `trial`，生产环境使用 `release`。
+使用微信开发者工具打开 `apps/miniapp`，使用正式小程序 AppID。小程序统一请求生产 API `https://stock.gc9527.com`；体验版和正式版都不再切换到测试域名。
 
 ## 阿里云部署要点
 
-1. 在阿里云 ECS、容器服务或其他目标运行环境创建项目目录。
-2. 上传后端源码、`package.json`、`package-lock.json` 和经过安全配置的 `.env.production`。
-3. `MONGODB_URI` 必须指向阿里云可访问的 MongoDB，不能使用 `localhost` 或已下线的旧平台内网域名。
-4. 配置安全组/负载均衡放行应用端口，推荐由 Nginx 反向代理并启用 HTTPS。
-5. 使用 `./entrypoint.sh prod` 或 `NODE_ENV=production npm run start:prod` 启动并设置进程守护。
-6. 发布后检查健康接口、登录接口及微信小程序绑定接口。
+1. 在阿里云服务器创建项目目录。
+2. 上传后端源码、`package.json`、`package-lock.json` 和安全配置的 `.env.production`。
+3. `MONGODB_URI` 必须使用阿里云生产 MongoDB，不能使用 `localhost` 或任何测试库连接串。
+4. 前端生产构建产物和后端均部署到阿里云，由 Nginx 提供 H5 并反向代理 API。
+5. 使用 `./entrypoint.sh prod` 或 `NODE_ENV=production npm run start:prod` 启动后端并设置进程守护。
+6. 发布后检查健康接口、登录接口及微信小程序绑定接口，并确认后端连接阿里云 MongoDB。
 
 不要把真实数据库密码、JWT 密钥、微信 AppSecret 或行情 Token 提交到 Git。
 

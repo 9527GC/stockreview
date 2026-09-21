@@ -5,11 +5,11 @@ export default {
     // 检查 Token 是否存在，不存在则重定向至登录页
     const token = uni.getStorageSync('token');
     // 跨平台获取当前页面路径
-    const pages = getCurrentPages && getCurrentPages();
+    const pages = typeof getCurrentPages === 'function' ? getCurrentPages() : [];
     const currentPath = pages && pages.length > 0 ? pages[pages.length - 1].route : '';
 
     // 如果没有 token 且当前不是登录页，则跳转
-    if (!token && !currentPath.includes('login')) {
+    if (!token && currentPath && !currentPath.includes('login')) {
       uni.reLaunch({ url: '/pages/login/login' });
     }
   },

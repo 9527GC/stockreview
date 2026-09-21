@@ -266,3 +266,9 @@ export const uploadAvatar = (filePath) => {
 
 export const createMiniappLoginCode = () => request({ url: '/api/auth/wechat/miniapp-login/create', method: 'POST', silent: true });
 export const getMiniappLoginStatus = (token) => request({ url: '/api/auth/wechat/miniapp-login/status', method: 'GET', params: { token }, silent: true });
+
+// Company actions
+export const getCompanyActions = (symbol) => request({ url: '/api/company-actions', method: 'GET', params: { symbol } });
+export const addCompanyAction = (data) => request({ url: '/api/company-actions', method: 'POST', data });
+export const updateCompanyAction = (id, data) => request({ url: `/api/company-actions/${id}`, method: 'PUT', data });
+export const deleteCompanyAction = (id) => request({ url: `/api/company-actions/${id}`, method: 'DELETE' });

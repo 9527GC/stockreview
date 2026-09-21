@@ -16,8 +16,8 @@
 
 | 环境 | 说明 | 启动命令 | 数据库 |
 |------|------|----------|--------|
-| `development` | 本地开发 / 测试 | `npm run dev` | 本地 MongoDB 或阿里云测试数据库 |
-| `production` | 生产环境 | `npm run start:prod` | 阿里云 MongoDB |
+| `development` | 本地开发 | `npm run dev` | 本机 MongoDB |
+| `production` | 生产环境 | `npm run start:prod` | 阿里云 MongoDB 生产实例（已迁移） |
 
 ### 环境变量配置
 
@@ -25,8 +25,8 @@
 
 | 文件 | 用途 |
 |------|------|
-| `.env.development` | 开发/测试环境配置（连接测试数据库） |
-| `.env.production` | 生产环境配置（连接生产数据库） |
+| `.env.development` | 本地开发配置（连接本机 MongoDB） |
+| `.env.production` | 生产环境配置（连接已迁移至阿里云的生产数据库） |
 
 **关键环境变量：**
 

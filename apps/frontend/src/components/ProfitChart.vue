@@ -77,7 +77,7 @@ const updateChart = () => {
       {
         name: '我的',
         type: 'line',
-        smooth: true,
+        smooth: false,
         connectNulls: true,
         showSymbol: false,
         data: props.data.map(item => item.value),
@@ -93,7 +93,7 @@ const updateChart = () => {
       {
         name: '上证指数',
         type: 'line',
-        smooth: true,
+        smooth: false,
         connectNulls: true,
         showSymbol: false,
         data: props.data.map(item => item.benchmark),
