@@ -248,7 +248,7 @@ Page({
   rescan() {
     wx.scanCode({
       onlyFromCamera: true,
-      scanType: ['qrCode'],
+      scanType: ['qrCode', 'wxCode'],
       success: (result) => {
         const bindingToken = tokenFromScanResult(result);
         if (!bindingToken) {

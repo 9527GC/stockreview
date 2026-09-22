@@ -8,12 +8,12 @@ const root = path.resolve(__dirname, '..');
 const pageSource = fs.readFileSync(path.join(root, 'pages/wechat-bind/index.js'), 'utf8');
 const envPath = path.join(root, 'config/env.js');
 
-const loadPage = () => {
+const loadPage = (wx = {}) => {
   let definition;
   vm.runInNewContext(pageSource, {
     Page: (page) => { definition = page; },
     require: (id) => require(path.resolve(root, 'pages/wechat-bind', id)),
-    wx: {}
+    wx
   }, { filename: 'pages/wechat-bind/index.js' });
   return definition;
 };
@@ -49,4 +49,25 @@ test('合法 login scene 仍确认电脑端登录', () => {
 
   assert.equal(context.confirmedToken, token);
   assert.equal(context.checkCurrentBindingCalls, 0);
+});
+test('重新扫码同时支持普通二维码和微信小程序码', () => {
+  let scanOptions;
+  const token = 'b'.repeat(32);
+  const wx = {
+    scanCode(options) {
+      scanOptions = options;
+      options.success({ scanType: 'WX_CODE', path: `pages/wechat-bind/index?scene=${token}` });
+    }
+  };
+  const page = loadPage(wx);
+  const context = {
+    data: {},
+    setData(update) { Object.assign(this.data, update); },
+    showRescanError(message) { this.error = message; }
+  };
+
+  page.rescan.call(context);
+
+  assert.equal(JSON.stringify(scanOptions.scanType), JSON.stringify(['qrCode', 'wxCode']));
+  assert.equal(context.data.bindingToken, token);
 });
