@@ -22,6 +22,30 @@ const tradeSchema = new mongoose.Schema({
   feeRate: { type: Number, default: null }, // 仅 mode=rate 时使用，单位：‱（万分之一）
   feeAmount: { type: Number, default: null }, // 仅 mode=amount 时使用，原始币种固定费用金额
   currency: { type: String, default: 'CNY' }, // CNY, USD, HKD
+  fxRateToCNY: {
+    type: Number,
+    required: true,
+    validate: {
+      validator: (value) => Number.isFinite(value) && value > 0,
+      message: 'fxRateToCNY must be a positive number'
+    }
+  },
+  grossAmount: {
+    type: Number,
+    required: true,
+    validate: {
+      validator: (value) => Number.isFinite(value) && value > 0,
+      message: 'grossAmount must be a positive number'
+    }
+  },
+  netSettlementAmount: {
+    type: Number,
+    required: true,
+    validate: {
+      validator: (value) => Number.isFinite(value) && value >= 0,
+      message: 'netSettlementAmount must be a non-negative number'
+    }
+  },
   market: { type: String }, // SH, SZ, HK, US
   mood: { type: String, enum: TRADE_MOODS, default: 'NEUTRAL' },
   marketOverview: { type: Object, default: null },
@@ -44,6 +68,7 @@ const holdingSchema = new mongoose.Schema({
   avgCost: { type: Number, default: 0 },
   lastPrice: { type: Number, default: null },
   lastPriceAt: { type: Date, default: null },
+  lastPriceDate: { type: String, default: null },
   currency: { type: String, default: 'CNY' },
   marketTag: { type: String }
 });

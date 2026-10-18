@@ -12,7 +12,7 @@ const User = require('../models/User');
 const { getHistoricalIndexSeries } = require('../utils/marketData');
 const { getRates } = require('../utils/currency');
 const { parseDateInOffset } = require('../utils/datetime');
-const { calculateDilutedPerformance } = require('../utils/cost');
+const { calculateWeightedAveragePerformance } = require('../utils/cost');
 const { round2 } = require('../utils/pnl');
 const { normalizeSymbol } = require('../utils/symbol');
 const moment = require('moment');
@@ -424,7 +424,7 @@ class ProfitCurveScheduler {
           CorporateAction.find({ userId: user._id })
         ]);
         const rates = await getRates();
-        const perfMap = calculateDilutedPerformance({ trades, actions, rates });
+        const perfMap = calculateWeightedAveragePerformance({ trades, rates });
         const holdings = [];
 
         perfMap.forEach((perf, symbol) => {

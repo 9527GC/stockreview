@@ -8,6 +8,7 @@ const app = require('../src/index');
 const User = require('../src/models/User');
 const { Trade, Holding } = require('../src/models/Trade');
 const { Asset } = require('../src/models/Asset');
+const { getRates } = require('../src/utils/currency');
 
 let token;
 let userId;
@@ -22,6 +23,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  getRates.mockResolvedValue({ CNY: 1, USD: 7.2, HKD: 0.92 });
   await Trade.deleteMany({ userId });
   await Holding.deleteMany({ userId });
   await Asset.deleteMany({ userId });
@@ -81,6 +83,100 @@ describe('Trade API', () => {
     expect(res.body.cognitiveBias).toBe('过早确认');
   });
 
+  test('拒绝请求币种与标的市场币种冲突的交易', async () => {
+    const res = await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: '00700.HK',
+        currency: 'USD',
+        type: 'BUY',
+        price: 100,
+        quantity: 1,
+        commission: 0,
+        date: '2026-06-27T09:30:00+08:00',
+        name: '腾讯控股'
+      });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body.message).toMatch(/currency/i);
+  });
+
+  test('外币交易持久化锁定汇率和清算金额，并由账本重建分币种现金', async () => {
+    const res = await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: 'AAPL.US',
+        type: 'BUY',
+        price: 10,
+        quantity: 3,
+        commission: 1,
+        date: '2026-06-27T09:30:00+08:00',
+        name: 'Apple'
+      });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.body).toMatchObject({
+      currency: 'USD',
+      fxRateToCNY: 7.2,
+      grossAmount: 30,
+      netSettlementAmount: 31
+    });
+
+    const [trade, asset] = await Promise.all([
+      Trade.findById(res.body._id),
+      Asset.findOne({ userId })
+    ]);
+    expect(trade.toObject()).toMatchObject({
+      currency: 'USD',
+      fxRateToCNY: 7.2,
+      grossAmount: 30,
+      netSettlementAmount: 31
+    });
+    expect(asset.cashBalances.get('USD')).toBe(-31);
+    expect(asset.cash).toBe(-223.2);
+  });
+
+  test('复盘字段编辑保留锁定金额，经济字段更正使用更正时汇率同步重算', async () => {
+    const created = await request(app)
+      .post('/api/trades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        symbol: 'AAPL.US',
+        type: 'BUY',
+        price: 10,
+        quantity: 2,
+        commission: 1,
+        date: '2026-06-27T09:30:00+08:00',
+        name: 'Apple'
+      });
+
+    const reviewOnly = await request(app)
+      .put(`/api/trades/${created.body._id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ logic: '仅补充复盘结论' });
+
+    expect(reviewOnly.statusCode).toBe(200);
+    expect(reviewOnly.body).toMatchObject({
+      fxRateToCNY: 7.2,
+      grossAmount: 20,
+      netSettlementAmount: 21
+    });
+
+    getRates.mockResolvedValue({ CNY: 1, USD: 7.3, HKD: 0.92 });
+    const corrected = await request(app)
+      .put(`/api/trades/${created.body._id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ price: 12, commission: 2 });
+
+    expect(corrected.statusCode).toBe(200);
+    expect(corrected.body).toMatchObject({
+      fxRateToCNY: 7.3,
+      grossAmount: 24,
+      netSettlementAmount: 26
+    });
+  });
   test('should update a trade without crashing (currency inference after fetch)', async () => {
     const created = await request(app)
       .post('/api/trades')
@@ -133,8 +229,71 @@ describe('Trade API', () => {
     expect(res.statusCode).toBe(400);
     expect(res.body.message).toContain('Sell quantity exceeds holding quantity');
   });
+  test('补录早于买入日的卖出会被拒绝且不写入非法账本', async () => {
+    const buy = await request(app).post('/api/trades').set('Authorization', `Bearer ${token}`).send({
+      symbol: '600519.SH', type: 'BUY', price: 10, quantity: 100, commission: 0,
+      date: '2026-09-02T09:30:00+08:00', name: '贵州茅台'
+    });
+    expect(buy.statusCode).toBe(201);
+
+    const sell = await request(app).post('/api/trades').set('Authorization', `Bearer ${token}`).send({
+      symbol: '600519.SH', type: 'SELL', price: 10, quantity: 100, commission: 0,
+      date: '2026-09-01T09:30:00+08:00', name: '贵州茅台'
+    });
+
+    expect(sell.statusCode).toBe(400);
+    expect(await Trade.countDocuments({ userId })).toBe(1);
+  });
+
+  test('删除会导致后续卖出超卖的买入时应拒绝删除并保留交易', async () => {
+    const buy = await request(app).post('/api/trades').set('Authorization', `Bearer ${token}`).send({
+      symbol: '600519.SH', type: 'BUY', price: 10, quantity: 100, commission: 0,
+      date: '2026-09-01T09:30:00+08:00', name: '贵州茅台'
+    });
+    const sell = await request(app).post('/api/trades').set('Authorization', `Bearer ${token}`).send({
+      symbol: '600519.SH', type: 'SELL', price: 11, quantity: 100, commission: 0,
+      date: '2026-09-02T09:30:00+08:00', name: '贵州茅台'
+    });
+    expect(buy.statusCode).toBe(201);
+    expect(sell.statusCode).toBe(201);
+
+    const deletion = await request(app).delete(`/api/trades/reviews/${buy.body._id}`).set('Authorization', `Bearer ${token}`);
+
+    expect(deletion.statusCode).toBe(400);
+    expect(await Trade.findById(buy.body._id)).not.toBeNull();
+  });
 });
 
+describe('GET /api/trades/history-holdings', () => {
+  test('同一标的两轮完整清仓按独立周期返回历史持仓', async () => {
+    const trades = [
+      { symbol: '600519.SH', type: 'BUY', price: 10, quantity: 100, date: '2026-06-01T09:30:00+08:00', name: '贵州茅台' },
+      { symbol: '600519.SH', type: 'SELL', price: 11, quantity: 100, date: '2026-06-02T14:30:00+08:00', name: '贵州茅台' },
+      { symbol: '600519.SH', type: 'BUY', price: 20, quantity: 100, date: '2026-06-03T09:30:00+08:00', name: '贵州茅台' },
+      { symbol: '600519.SH', type: 'SELL', price: 22, quantity: 100, date: '2026-06-04T14:30:00+08:00', name: '贵州茅台' }
+    ];
+
+    for (const trade of trades) {
+      const created = await request(app)
+        .post('/api/trades')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ ...trade, commission: 0 });
+      expect(created.statusCode).toBe(201);
+    }
+
+    const res = await request(app)
+      .get('/api/trades/history-holdings?sort=lastTradeDate')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.total).toBe(2);
+    expect(res.body.list).toHaveLength(2);
+    expect(res.body.list.map(item => item.cycleId)).toEqual(['600519.SH:1', '600519.SH:2']);
+    expect(res.body.list.map(item => item.cumulativeProfit)).toEqual([100, 200]);
+    expect(res.body.list.map(item => item.profitRate)).toEqual([0.1, 0.1]);
+    expect(res.body.list.map(item => item.tradesCount)).toEqual([2, 2]);
+  });
+});
 describe('GET /api/trades/history-holdings/:symbol/groups', () => {
   test('单次买入清仓应返回一个分仓，实现盈亏正确', async () => {
     await request(app)

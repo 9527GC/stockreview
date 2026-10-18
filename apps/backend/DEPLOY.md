@@ -45,3 +45,34 @@ npm ci --omit=dev
 3. 后端进程已重启；
 4. 请求实际发送到当前环境的 `/api/users/wechat/miniapp-bind`；
 5. 数据库用户记录中已出现 `wechatNickname` 与 `wechatAvatar`。
+## 指标发布与数据重置核验
+
+### 发布前回归
+
+在发布包含资产、交易、转账或收益统计改动的版本前，必须在隔离环境执行：
+
+```bash
+cd apps/backend
+npm test -- --runInBand
+npm run lint
+
+cd ../frontend
+npm test -- --run
+npm run build:h5
+```
+
+后端回归包含空账户 → 入金 → 买入 → 清仓 → 统一日快照 → 汇总、收益日历、收益曲线与完整清仓周期的端到端用例。验收时重点确认：汇总的 `totalDailyProfit` 与收益日历同一北京时间日期的金额一致，收益曲线只复利日收益率而不将入金/出金计作收益，清仓后完整周期的收益率正确。
+
+### 生产业务数据重置（仅维护窗口）
+
+若需要将业务数据清为空账户状态，仅可在完成数据库备份、复核生产 `MONGODB_URI` 且进入维护窗口后执行。该操作不可恢复：
+
+```bash
+# 单用户
+npm run reset:user-business-data -- --userId <USER_ID> --confirm
+
+# 全部用户
+npm run reset:all-business-data -- --confirm-all-users
+```
+
+不要在生产环境试运行或省略确认参数；缺少确认参数时脚本会在连接数据库前退出。脚本只删除用户业务数据和临时微信会话，保留账号身份、密码、微信绑定身份、全局行情与已撤销令牌；执行后还需人工核对脚本输出的集合删除数量、重置用户数量与时间戳。

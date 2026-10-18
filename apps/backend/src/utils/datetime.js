@@ -1,4 +1,6 @@
-const getDateStringInOffset = (offsetMinutes = 480, baseDate = new Date()) => {
+const BEIJING_OFFSET_MINUTES = 480;
+
+const getDateStringInOffset = (offsetMinutes = BEIJING_OFFSET_MINUTES, baseDate = new Date()) => {
   const offsetMs = Number(offsetMinutes) * 60 * 1000;
   const shifted = new Date((baseDate instanceof Date ? baseDate.getTime() : Date.now()) + offsetMs);
   return shifted.toISOString().slice(0, 10);
@@ -12,6 +14,11 @@ const getDayRangeInOffset = (offsetMinutes, baseDate = new Date()) => {
   const startMs = shifted.getTime() - offsetMs;
   const endMs = startMs + 24 * 60 * 60 * 1000;
   return { start: new Date(startMs), end: new Date(endMs) };
+};
+
+const getPreviousDateStringInOffset = (offsetMinutes, baseDate) => {
+  const { start } = getDayRangeInOffset(offsetMinutes, baseDate);
+  return getDateStringInOffset(offsetMinutes, new Date(start.getTime() - 1));
 };
 
 const parseDateInOffset = (input, offsetMinutes) => {
@@ -39,5 +46,10 @@ const parseDateInOffset = (input, offsetMinutes) => {
   return new Date(utcMs);
 };
 
-module.exports = { getDateStringInOffset, getDayRangeInOffset, parseDateInOffset };
-
+module.exports = {
+  BEIJING_OFFSET_MINUTES,
+  getDateStringInOffset,
+  getDayRangeInOffset,
+  getPreviousDateStringInOffset,
+  parseDateInOffset
+};

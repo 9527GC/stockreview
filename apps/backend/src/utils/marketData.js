@@ -1226,6 +1226,14 @@ const parseSinaData = (code, dataStr) => {
   return result;
 };
 
+// Persist only a price whose own close date is explicit. `preClose` belongs to a prior
+// trading session and cannot safely inherit the current quote's date.
+const getQuoteLastClose = (quote) => {
+  const price = Number(quote?.close ?? quote?.lastClose);
+  const date = String(quote?.closeDate ?? quote?.lastCloseDate ?? '').trim();
+  if (!Number.isFinite(price) || price <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  return { price, date };
+};
 /**
  * 获取实时行情
  * @param {string|string[]} symbols 股票代码或代码数组
@@ -1440,6 +1448,7 @@ const getMarketOverview = async ({ date, forceRefresh = false } = {}) => {
 
 module.exports = {
   getQuotes,
+  getQuoteLastClose,
   getMarketOverview,
   buildTradeMarketSnapshot,
   buildBenchmarkCurvePoints,

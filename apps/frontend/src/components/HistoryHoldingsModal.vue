@@ -12,7 +12,7 @@
     <a-table
       :columns="columns"
       :data-source="historyHoldings"
-      :row-key="record => record.symbol"
+      :row-key="record => getHistoryCycleKey(record)"
       :loading="loading"
       :pagination="pagination"
       @change="handleTableChange"
@@ -27,24 +27,24 @@
         <span class="expand-column-title">详情</span>
       </template>
       <template #expandedRowRender="{ record }">
-        <div v-if="isExpandedLoading(record.symbol)" class="group-loading">
+        <div v-if="isExpandedLoading(record)" class="group-loading">
           <a-spin />
         </div>
-        <a-empty v-else-if="getExpandedGroups(record.symbol).length === 0" description="暂无交易记录" />
+        <a-empty v-else-if="getExpandedGroups(record).length === 0" description="暂无交易记录" />
         <a-collapse
           v-else
           class="group-collapse"
-          :activeKey="getExpandedActiveKey(record.symbol)"
-          @change="(keys) => setExpandedActiveKey(record.symbol, keys)"
+          :activeKey="getExpandedActiveKey(record)"
+          @change="(keys) => setExpandedActiveKey(record, keys)"
           size="small"
         >
           <a-collapse-panel
-            v-for="group in getExpandedGroups(record.symbol)"
+            v-for="group in getExpandedGroups(record)"
             :key="group.groupId"
           >
             <template #header>
               <div class="group-header">
-                <span class="group-title">第 {{ group.groupId }} 次分仓</span>
+                <span class="group-title">周期 {{ group.groupId }}</span>
                 <span>清仓 {{ dayjs(group.endDate).format('YYYY-MM-DD') }}</span>
                 <span :class="group.realizedProfit >= 0 ? 'profit' : 'loss'">
                   {{ group.realizedProfit >= 0 ? '+' : '' }}{{ group.realizedProfit.toFixed(2) }}
@@ -77,10 +77,10 @@
                   {{ getCurrencySymbol(trade.currency) }}{{ (trade.price * trade.quantity).toFixed(2) }}
                 </template>
                 <template v-if="column.key === 'action'">
-                  <a-button type="link" size="small" @click="handleEdit(trade)">编辑</a-button>
+                  <a-button type="link" size="small" @click="handleEdit(trade, record)">编辑</a-button>
                   <a-popconfirm
                     title="确定要删除这条交易记录吗？"
-                    @confirm="handleDeleteTrade(trade.id, record.symbol)"
+                    @confirm="handleDeleteTrade(trade.id, record)"
                   >
                     <a-button type="link" danger size="small">删除</a-button>
                   </a-popconfirm>
@@ -94,7 +94,7 @@
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'stock'">
           <div style="font-weight: 500;">{{ record.name }}</div>
-          <div style="font-size: 12px; color: #999;">{{ record.symbol }}</div>
+          <div style="font-size: 12px; color: #999;">{{ record.symbol }} · {{ record.cycleId }}</div>
         </template>
         <template v-if="column.key === 'cumulativeProfit'">
           <span :style="{ color: record.cumulativeProfit >= 0 ? '#cf1322' : '#3f8600', fontWeight: '500' }">
@@ -113,7 +113,7 @@
         </template>
         <template v-if="column.key === 'action'">
           <a-popconfirm
-            title="确定要彻底删除该股票的所有复盘记录吗？"
+            title="确定要删除该标的的全部交易记录吗？"
             @confirm="handleDelete(record.symbol)"
           >
             <a-button type="link" danger size="small">删除</a-button>
@@ -138,6 +138,7 @@ import { getHistoryHoldings, getHistoryHoldingGroups } from '@/api/index';
 import { message } from 'ant-design-vue';
 import dayjs from 'dayjs';
 import { normalizeSymbol } from '@/utils/stock';
+import { getHistoryCycleKey, selectHistoryCycleGroups } from '@/utils/historyCycles';
 import TradeModal from './TradeModal.vue';
 
 const props = defineProps({
@@ -155,11 +156,12 @@ const pageSize = ref(10);
 const total = ref(0);
 const sort = ref('-lastTradeDate');
 const expandedRowKeys = ref([]);
-const expandedBySymbol = ref({});
+const expandedByCycle = ref({});
 
 const editModalOpen = ref(false);
 const editingTrade = ref(null);
 const editingSymbol = ref('');
+const editingCycle = ref(null);
 
 const pagination = computed(() => ({
   current: currentPage.value,
@@ -170,9 +172,9 @@ const pagination = computed(() => ({
   showTotal: t => `共 ${t} 条`
 }));
 
-const ensureExpandedState = (symbol) => {
-  const key = normalizeSymbol(symbol);
-  const map = expandedBySymbol.value;
+const ensureExpandedState = (record) => {
+  const key = getHistoryCycleKey(record);
+  const map = expandedByCycle.value;
   if (!map[key]) {
     map[key] = {
       list: [],
@@ -199,13 +201,13 @@ const fetchHistoryHoldings = async () => {
   }
 };
 
-const fetchExpandedGroups = async (symbol) => {
-  const key = normalizeSymbol(symbol);
-  const state = ensureExpandedState(key);
+const fetchExpandedGroups = async (record) => {
+  const key = getHistoryCycleKey(record);
+  const state = ensureExpandedState(record);
   state.loading = true;
   try {
-    const res = await getHistoryHoldingGroups(key);
-    state.list = Array.isArray(res?.list) ? res.list : [];
+    const res = await getHistoryHoldingGroups(normalizeSymbol(record.symbol));
+    state.list = selectHistoryCycleGroups(res?.list, key);
     state.activeKey = state.list.length > 0 ? [state.list[0].groupId] : [];
   } finally {
     state.loading = false;
@@ -222,11 +224,12 @@ const handleDelete = async (symbol) => {
       message.success('历史记录已彻底清除');
     }
 
-    const key = normalizeSymbol(symbol);
-    const next = { ...expandedBySymbol.value };
-    delete next[key];
-    expandedBySymbol.value = next;
-    expandedRowKeys.value = expandedRowKeys.value.filter(k => k !== key);
+    const symbolKey = normalizeSymbol(symbol);
+    const next = Object.fromEntries(
+      Object.entries(expandedByCycle.value).filter(([cycleId]) => !cycleId.startsWith(`${symbolKey}:`))
+    );
+    expandedByCycle.value = next;
+    expandedRowKeys.value = expandedRowKeys.value.filter(cycleId => !cycleId.startsWith(`${symbolKey}:`));
     fetchHistoryHoldings();
     emit('deleted');
   } catch (err) {
@@ -234,24 +237,25 @@ const handleDelete = async (symbol) => {
   }
 };
 
-const handleDeleteTrade = async (id, symbol) => {
+const handleDeleteTrade = async (id, cycle) => {
   try {
     await store.deleteTrade(id);
     message.success('交易记录已删除');
 
-    if (symbol) {
-      fetchExpandedGroups(symbol);
+    if (cycle) {
+      fetchExpandedGroups(cycle);
     }
     fetchHistoryHoldings();
-    emit('changed', symbol);
+    emit('changed', cycle?.symbol);
   } catch (err) {
     message.error('删除失败');
   }
 };
 
-const handleEdit = (record) => {
+const handleEdit = (record, cycle) => {
   editingTrade.value = record;
   editingSymbol.value = record.symbol || '';
+  editingCycle.value = cycle || null;
   editModalOpen.value = true;
 };
 
@@ -260,12 +264,13 @@ const onEditSuccess = async () => {
   editingTrade.value = null;
   message.success('交易记录已更新');
 
-  if (editingSymbol.value) {
-    fetchExpandedGroups(editingSymbol.value);
+  if (editingCycle.value) {
+    fetchExpandedGroups(editingCycle.value);
   }
   fetchHistoryHoldings();
   emit('changed', editingSymbol.value);
   editingSymbol.value = '';
+  editingCycle.value = null;
 };
 
 const handleTableChange = (paginationConfig, filters, sorterConfig) => {
@@ -285,41 +290,40 @@ const handleTableChange = (paginationConfig, filters, sorterConfig) => {
 };
 
 const handleExpandedRowsChange = (keys) => {
-  expandedRowKeys.value = (keys || []).map(k => normalizeSymbol(k));
+  expandedRowKeys.value = keys || [];
 };
 
 const handleExpand = (expanded, record) => {
-  const key = normalizeSymbol(record?.symbol);
+  const key = getHistoryCycleKey(record);
   if (!key) return;
   if (expanded) {
-    const state = ensureExpandedState(key);
+    const state = ensureExpandedState(record);
     if (!state.loading && state.list.length === 0) {
-      fetchExpandedGroups(key);
+      fetchExpandedGroups(record);
     }
   }
 };
 
-const getExpandedGroups = (symbol) => {
-  const key = normalizeSymbol(symbol);
-  const state = expandedBySymbol.value[key];
+const getExpandedGroups = (record) => {
+  const key = getHistoryCycleKey(record);
+  const state = expandedByCycle.value[key];
   return state?.list || [];
 };
 
-const getExpandedActiveKey = (symbol) => {
-  const key = normalizeSymbol(symbol);
-  const state = expandedBySymbol.value[key];
+const getExpandedActiveKey = (record) => {
+  const key = getHistoryCycleKey(record);
+  const state = expandedByCycle.value[key];
   return state?.activeKey || [];
 };
 
-const setExpandedActiveKey = (symbol, keys) => {
-  const key = normalizeSymbol(symbol);
-  const state = ensureExpandedState(key);
+const setExpandedActiveKey = (record, keys) => {
+  const state = ensureExpandedState(record);
   state.activeKey = keys || [];
 };
 
-const isExpandedLoading = (symbol) => {
-  const key = normalizeSymbol(symbol);
-  const state = expandedBySymbol.value[key];
+const isExpandedLoading = (record) => {
+  const key = getHistoryCycleKey(record);
+  const state = expandedByCycle.value[key];
   return !!state?.loading;
 };
 
@@ -389,7 +393,7 @@ watch(
       historyHoldings.value = [];
       total.value = 0;
       expandedRowKeys.value = [];
-      expandedBySymbol.value = {};
+      expandedByCycle.value = {};
     }
   },
   { immediate: true }

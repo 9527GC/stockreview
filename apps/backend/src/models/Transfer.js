@@ -1,10 +1,17 @@
 const mongoose = require('mongoose');
 
+const positiveNumber = (field) => ({
+  validator: (value) => Number.isFinite(value) && value > 0,
+  message: `${field} must be a positive number`
+});
+
 const transferSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   type: { type: String, enum: ['IN', 'OUT'], required: true },
   amount: { type: Number, required: true },
   currency: { type: String, default: 'CNY' },
+  fxRateToCNY: { type: Number, required: true, validate: positiveNumber('fxRateToCNY') },
+  amountCNY: { type: Number, required: true, validate: positiveNumber('amountCNY') },
   date: { type: Date, default: Date.now },
   remark: { type: String }
 });
