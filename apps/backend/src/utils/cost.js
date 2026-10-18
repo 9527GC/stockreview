@@ -19,7 +19,7 @@ const { normalizeSymbol } = require('./symbol');
  * @param {Object} params.rates 汇率映射，如 { CNY: 1, HKD: 0.91, USD: 7.23 }
  * @returns {Map<string, Object>} key 为 normalizeSymbol(symbol)，value 为绩效对象
  */
-const calculateDilutedPerformance = ({ trades, rates }) => {
+const calculateDilutedPerformance = ({ trades, actions = [], rates = {} }) => {
   const bySymbol = new Map();
 
   const ensure = (symbol) => {
@@ -29,13 +29,13 @@ const calculateDilutedPerformance = ({ trades, rates }) => {
         symbol: key,
         name: key,
         quantity: 0,
-        avgCost: 0,            // 原始币种摊薄成本
-        totalBuyCost: 0,       // 累计买入清算金额（原始币种）
-        totalSellProceed: 0,   // 累计卖出清算金额（原始币种）
-        totalBuyQty: 0,        // 累计买入数量
-        totalSellQty: 0,       // 累计卖出数量
+        avgCost: 0,
+        totalBuyCost: 0,
+        totalSellProceed: 0,
+        totalBuyQty: 0,
+        totalSellQty: 0,
         currency: 'CNY',
-        realizedProfitCNY: 0,  // 清仓后/历史已实现盈亏
+        realizedProfitCNY: 0,
         lastTradeDate: null,
         tradesCount: 0
       });
@@ -43,7 +43,30 @@ const calculateDilutedPerformance = ({ trades, rates }) => {
     return bySymbol.get(key);
   };
 
-  (trades || []).forEach((t) => {
+  const timeline = [
+    ...(trades || []).map((item) => ({ kind: 'trade', item })),
+    ...(actions || []).map((item) => ({ kind: 'action', item }))
+  ].sort((a, b) => {
+    const dateDiff = new Date(a.item.date) - new Date(b.item.date);
+    if (dateDiff !== 0) return dateDiff;
+    // 同一生效日先执行公司行动，再执行当日成交，确保拆分后卖出按新份额和成本计算。
+    if (a.kind !== b.kind) return a.kind === 'action' ? -1 : 1;
+    return String(a.item._id || '').localeCompare(String(b.item._id || ''));
+  });
+
+  timeline.forEach(({ kind, item }) => {
+    if (kind === 'action') {
+      const key = normalizeSymbol(item.symbol);
+      if (!bySymbol.has(key)) return;
+      const agg = bySymbol.get(key);
+      if (item.name) agg.name = item.name;
+      agg.currency = item.currency || agg.currency || 'CNY';
+      const { applyCorporateActions } = require('./corporateActions');
+      applyCorporateActions(bySymbol, [item], rates);
+      return;
+    }
+
+    const t = item;
     const agg = ensure(t.symbol);
     agg.tradesCount += 1;
     if (t.name) agg.name = t.name;
@@ -57,27 +80,22 @@ const calculateDilutedPerformance = ({ trades, rates }) => {
     const commission = Number(t.commission) || 0;
 
     if (t.type === 'BUY') {
-      const buyAmount = price * qty;
-      agg.totalBuyCost += buyAmount + commission;
+      agg.totalBuyCost += price * qty + commission;
       agg.totalBuyQty += qty;
       agg.quantity += qty;
     } else if (t.type === 'SELL') {
-      const sellAmount = price * qty;
-      agg.totalSellProceed += sellAmount - commission;
+      agg.totalSellProceed += price * qty - commission;
       agg.totalSellQty += qty;
       agg.quantity = Math.max(0, agg.quantity - qty);
     }
 
-    // 重新计算摊薄成本（原始币种）
     if (agg.quantity > 0) {
       agg.avgCost = (agg.totalBuyCost - agg.totalSellProceed) / agg.quantity;
     } else {
-      // 全部清仓，成本不存在，累计已实现盈亏，并重置累计买入/卖出金额
       agg.avgCost = 0;
       const buyCNY = agg.totalBuyCost * rate;
       const sellCNY = agg.totalSellProceed * rate;
       agg.realizedProfitCNY += sellCNY - buyCNY;
-      // 保留清仓前的总买入成本，用于历史持仓收益率计算
       agg.closedTotalBuyCost = agg.totalBuyCost;
       agg.closedTotalSellProceed = agg.totalSellProceed;
       agg.totalBuyCost = 0;

@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const { Trade, Holding } = require('../models/Trade');
 const CompanyAction = require('../models/CompanyAction');
+const { CorporateAction } = require('../models/CorporateAction');
 const { Asset } = require('../models/Asset');
 const User = require('../models/User');
 const Transfer = require('../models/Transfer');
@@ -127,17 +128,18 @@ const validateTradeEditQuantity = async ({ userId, editedTradeId, updates }) => 
 };
 
 const rebuildAssetFromLedger = async (userId) => {
-  const [rates, transfers, tradesAsc, existingHoldings] = await Promise.all([
+  const [rates, transfers, tradesAsc, actionsAsc, existingHoldings] = await Promise.all([
     getRates(),
     Transfer.find({ userId }),
     Trade.find({ userId }).sort({ date: 1, _id: 1 }),
+    CorporateAction.find({ userId }).sort({ date: 1, _id: 1 }),
     Holding.find({ userId })
   ]);
 
-  const { cashCNY, principalCNY } = calculateCashAndPrincipalCNY({ transfers, trades: tradesAsc, rates });
+  const { cashCNY, principalCNY } = calculateCashAndPrincipalCNY({ transfers, trades: tradesAsc, actions: actionsAsc, rates });
 
   const existingBySymbol = new Map(existingHoldings.map(h => [normalizeSymbol(h.symbol), h]));
-  const performanceBySymbol = calculateDilutedPerformance({ trades: tradesAsc, rates });
+  const performanceBySymbol = calculateDilutedPerformance({ trades: tradesAsc, actions: actionsAsc, rates });
 
   const targetBySymbol = new Map();
   performanceBySymbol.forEach((perf) => {
@@ -244,8 +246,8 @@ const rebuildAssetFromLedger = async (userId) => {
   await asset.save();
 };
 
-const buildTradePerformanceBySymbol = ({ trades, rates }) => {
-  return calculateDilutedPerformance({ trades, rates });
+const buildTradePerformanceBySymbol = ({ trades, actions = [], rates }) => {
+  return calculateDilutedPerformance({ trades, actions, rates });
 };
 
 const getTradeSnapshotView = (trade) => {
@@ -269,14 +271,15 @@ const getTradeSnapshotView = (trade) => {
 exports.getHoldings = async (req, res) => {
   try {
     const userId = req.user._id;
-    const [holdings, asset, RATES, tradesAsc] = await Promise.all([
+    const [holdings, asset, RATES, tradesAsc, actionsAsc] = await Promise.all([
       Holding.find({ userId }),
       Asset.findOne({ userId }),
       getRates(),
-      Trade.find({ userId }).sort({ date: 1, _id: 1 })
+      Trade.find({ userId }).sort({ date: 1, _id: 1 }),
+      CorporateAction.find({ userId }).sort({ date: 1, _id: 1 })
     ]);
     const cashCNY = asset?.cash || 0;
-    const performanceBySymbol = buildTradePerformanceBySymbol({ trades: tradesAsc, rates: RATES });
+    const performanceBySymbol = buildTradePerformanceBySymbol({ trades: tradesAsc, actions: actionsAsc, rates: RATES });
 
     // 计算每只股票最近一次交易时间，用于前端默认排序
     const lastTradeDateBySymbol = new Map();
@@ -675,7 +678,8 @@ exports.getHistoryHoldings = async (req, res) => {
 
     const [rates, trades] = await Promise.all([
       getRates(),
-      Trade.find({ userId }).sort({ date: 1, _id: 1 })
+      Trade.find({ userId }).sort({ date: 1, _id: 1 }),
+      CorporateAction.find({ userId }).sort({ date: 1, _id: 1 })
     ]);
 
     const closed = Array.from(buildTradePerformanceBySymbol({ trades, rates }).values())

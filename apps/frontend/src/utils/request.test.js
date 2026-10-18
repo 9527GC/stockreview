@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { safeStringify, extractErrorText, clampToastText } from './request';
+import { safeStringify, extractErrorText, clampToastText, formatNetworkError } from './request';
 
 describe('safeStringify', () => {
   it('stringifies normal objects', () => {
@@ -73,5 +73,16 @@ describe('clampToastText', () => {
 
   it('keeps short text unchanged', () => {
     expect(clampToastText('short', 140)).toBe('short');
+  });
+});
+
+
+describe('formatNetworkError', () => {
+  it('将超时错误转换为可操作的中文提示', () => {
+    expect(formatNetworkError({ errMsg: 'request:fail timeout' })).toBe('连接超时，请检查网络后重试');
+  });
+
+  it('将未配置接口地址转换为明确的配置提示', () => {
+    expect(formatNetworkError(new Error('Missing required config: apiBaseUrl'))).toBe('测试环境接口地址未配置，请联系管理员');
   });
 });

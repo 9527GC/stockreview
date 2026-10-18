@@ -272,3 +272,8 @@ export const getCompanyActions = (symbol) => request({ url: '/api/company-action
 export const addCompanyAction = (data) => request({ url: '/api/company-actions', method: 'POST', data });
 export const updateCompanyAction = (id, data) => request({ url: `/api/company-actions/${id}`, method: 'PUT', data });
 export const deleteCompanyAction = (id) => request({ url: `/api/company-actions/${id}`, method: 'DELETE' });
+// 公司行动：独立于真实成交，保存后会自动重算持仓、现金和收益。
+export const getCorporateActions = () => request({ url: '/api/corporate-actions', method: 'GET' });
+export const createCorporateAction = (data) => request({ url: '/api/corporate-actions', method: 'POST', data });
+export const updateCorporateAction = (id, data) => request({ url: `/api/corporate-actions/${id}`, method: 'PUT', data });
+export const deleteCorporateAction = (id) => request({ url: `/api/corporate-actions/${id}`, method: 'DELETE' });

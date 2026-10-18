@@ -627,3 +627,31 @@
   | date     | string | 否  | 日期                     |
   | remark   | string | 否  | 备注                     |
 
+
+## 6. 公司行动（Corporate Actions）
+
+公司行动必须作为独立流水保存，不会伪造 0 元买入/卖出，也不会产生交易手续费。支持：现金分红、拆分、合并、送股、转增、配股/供股。新增、编辑或删除后，系统会从受影响的最早日期触发持仓、现金、收益曲线和日收益回算。
+
+### 获取公司行动
+
+- **接口地址**：`GET /api/corporate-actions`
+- **认证**：Bearer Token
+- **出参**：`{ "list": [...] }`
+
+### 新增公司行动
+
+- **接口地址**：`POST /api/corporate-actions`
+- **必填字段**：`symbol`、`name`、`type`、`date`
+- **类型**：`CASH_DIVIDEND`、`SPLIT`、`REVERSE_SPLIT`、`STOCK_DIVIDEND`、`BONUS_ISSUE`、`RIGHTS_ISSUE`
+- **通用字段**：`currency`（CNY/HKD/USD）、`remark`、`sourceFile`
+- **现金分红**：`cashAmount` 为到账金额；不改变持仓数量和成本，并计入现金与收益。
+- **拆分/合并**：`ratioNumerator` / `ratioDenominator` 表示“生效后 : 生效前”；只调整数量和单位成本，不影响总成本、现金或手续费。例如一拆二填写 `2:1`。
+- **送股/转增**：`quantityChange` 为增加数量；总成本不变，单位成本按新数量摊薄。
+- **配股/供股**：`quantityChange` 为增加数量，`cashAmount` 为原始币种现金支出；增加持仓成本、减少现金，不增加本金。
+- **去重**：同一用户、同一证券、同一中国时区自然日只允许新增一条公司行动，重复返回 `409`。服务端内部使用 `dateKey` 表示该自然日，客户端无需提交。
+
+### 编辑/删除公司行动
+
+- **接口地址**：`PUT /api/corporate-actions/:id`、`DELETE /api/corporate-actions/:id`
+- 仅能操作当前用户自己的记录。修改日期时会按旧日期和新日期中较早者开始重算。
+

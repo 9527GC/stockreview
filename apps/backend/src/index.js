@@ -53,6 +53,7 @@ const tradeRoutes = require('./routes/tradeRoutes');
 const transferRoutes = require('./routes/transferRoutes');
 const companyActionRoutes = require('./routes/companyActionRoutes');
 const marketRoutes = require('./routes/marketRoutes');
+const corporateActionRoutes = require('./routes/corporateActionRoutes');
 const { startProfitHistoryScheduler } = require('./jobs/profitHistoryScheduler');
 const { startMarketSnapshotScheduler } = require('./jobs/marketSnapshotScheduler');
 const profitCurveScheduler = require('./services/profitCurveScheduler');
@@ -144,6 +145,7 @@ app.use('/api/trades', tradeRoutes);
 app.use('/api/transfers', transferRoutes);
 app.use('/api/company-actions', companyActionRoutes);
 app.use('/api/market', marketRoutes);
+app.use('/api/corporate-actions', corporateActionRoutes);
 
 // Catch-all route for 404
 app.use((req, res) => {
