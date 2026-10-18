@@ -48,3 +48,8 @@ Thumbs.db
 deploy/*.local.ps1
 deploy/*.local.json
 
+
+# Machine-specific tooling and local runtime data
+.mcp.json
+.runtime/
+.superpowers/

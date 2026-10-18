@@ -1,24 +1,17 @@
 const CompanyAction = require('../models/CompanyAction');
 const { normalizeSymbol, buildSymbolAliases } = require('../utils/symbol');
-
-exports.list = async (req, res) => {
-  try {
-    const symbol = normalizeSymbol(req.query.symbol || '');
-    if (!symbol) return res.status(400).json({ message: 'Symbol is required' });
-    const symbols = [symbol, ...buildSymbolAliases(symbol)];
-    const list = await CompanyAction.find({ userId: req.user._id, symbol: { $in: symbols } }).sort({ date: 1, _id: 1 }).lean();
-    res.json({ list });
-  } catch (e) { res.status(500).json({ message: e.message }); }
+const ACTION_TYPES = ['DIVIDEND', 'SPLIT', 'MERGER', 'BONUS', 'RIGHTS', 'OTHER'];
+const numberOrNull = (value) => value === null || value === undefined || value === '' ? null : Number(value);
+const validateActionFields = (type, fields) => {
+  const positive = (key) => Number(fields[key]) > 0;
+  if (type === 'DIVIDEND' && !positive('cashPerShare')) return '请输入每股分红金额';
+  if ((type === 'SPLIT' || type === 'MERGER') && (!positive('beforeQuantity') || !positive('afterQuantity'))) return '请填写行动前后股数';
+  if (type === 'BONUS' && (!positive('beforeQuantity') || Number(fields.bonusQuantity) < 0)) return '请填写送转股参数';
+  if (type === 'RIGHTS' && (!positive('beforeQuantity') || Number(fields.rightsQuantity) < 0 || Number(fields.subscriptionPrice) < 0)) return '请填写完整的配股参数';
+  return '';
 };
-exports.create = async (req, res) => {
-  try {
-    const { symbol, name, date, type, description, quantityChange, cashAmount, currency, market } = req.body;
-    if (!symbol || !name || !date || !description) return res.status(400).json({ message: '股票、日期和说明不能为空' });
-    const action = await CompanyAction.create({ userId: req.user._id, symbol: normalizeSymbol(symbol), name, date, type, description, quantityChange: Number(quantityChange) || 0, cashAmount: Number(cashAmount) || 0, currency, market });
-    res.status(201).json(action);
-  } catch (e) { res.status(500).json({ message: e.message }); }
-};
-exports.update = async (req, res) => {
-  try { const a = await CompanyAction.findOneAndUpdate({ _id: req.params.id, userId: req.user._id }, req.body, { new: true, runValidators: true }); if (!a) return res.status(404).json({ message: '公司行动不存在' }); res.json(a); } catch (e) { res.status(500).json({ message: e.message }); }
-};
+const pickActionFields = (body) => { const fields = ['quantityChange', 'cashAmount', 'beforeQuantity', 'afterQuantity', 'bonusQuantity', 'rightsQuantity', 'subscribedQuantity', 'cashPerShare', 'subscriptionPrice', 'ratioNumerator', 'ratioDenominator']; return Object.fromEntries(fields.map(key => [key, numberOrNull(body[key])])); };
+exports.list = async (req, res) => { try { const symbol = normalizeSymbol(req.query.symbol || ''); if (!symbol) return res.status(400).json({ message: 'Symbol is required' }); const symbols = [symbol, ...buildSymbolAliases(symbol)]; const list = await CompanyAction.find({ userId: req.user._id, symbol: { $in: symbols } }).sort({ date: 1, _id: 1 }).lean(); res.json({ list }); } catch (e) { res.status(500).json({ message: e.message }); } };
+exports.create = async (req, res) => { try { const { symbol, name, date, description, currency, market } = req.body; const type = String(req.body.type || 'OTHER').toUpperCase(); if (!symbol || !name || !date || !description) return res.status(400).json({ message: '股票、日期和说明不能为空' }); if (!ACTION_TYPES.includes(type)) return res.status(400).json({ message: '不支持的公司行动类型' }); const fields = pickActionFields(req.body); const validationMessage = validateActionFields(type, fields); if (validationMessage) return res.status(400).json({ message: validationMessage }); const action = await CompanyAction.create({ userId: req.user._id, symbol: normalizeSymbol(symbol), name, date, type, description: String(description).trim(), ...fields, currency, market }); res.status(201).json(action); } catch (e) { res.status(500).json({ message: e.message }); } };
+exports.update = async (req, res) => { try { const updates = { ...req.body }; if (updates.type) updates.type = String(updates.type).toUpperCase(); Object.assign(updates, pickActionFields(req.body)); if (updates.type && !ACTION_TYPES.includes(updates.type)) return res.status(400).json({ message: '不支持的公司行动类型' }); const a = await CompanyAction.findOneAndUpdate({ _id: req.params.id, userId: req.user._id }, updates, { new: true, runValidators: true }); if (!a) return res.status(404).json({ message: '公司行动不存在' }); res.json(a); } catch (e) { res.status(500).json({ message: e.message }); } };
 exports.remove = async (req, res) => { try { const r = await CompanyAction.deleteOne({ _id: req.params.id, userId: req.user._id }); if (!r.deletedCount) return res.status(404).json({ message: '公司行动不存在' }); res.json({ success: true }); } catch (e) { res.status(500).json({ message: e.message }); } };

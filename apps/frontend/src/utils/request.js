@@ -93,7 +93,8 @@ const request = (options) => {
           if (currentRoute !== 'pages/login/login') {
             uni.navigateTo({ url: '/pages/login/login' });
           }
-          const msg = extractErrorText(res.data) || '登录已失效，请重新登录';
+          const rawMessage = extractErrorText(res.data);
+          const msg = rawMessage === 'Authentication required' ? '请先登录账号' : (rawMessage || '登录已失效，请重新登录');
           if (!shouldSilence(options)) {
             uni.showToast({
               title: clampToastText(msg),

@@ -354,8 +354,9 @@ describe('GET /api/trades/history-holdings/:symbol/groups', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.body.list).toHaveLength(2);
-    expect(res.body.list[0].realizedProfit).toBe(200);
-    expect(res.body.list[1].realizedProfit).toBe(600);
+    // History groups are returned newest-first.
+    expect(res.body.list[0].realizedProfit).toBe(600);
+    expect(res.body.list[1].realizedProfit).toBe(200);
   });
 
   test('部分卖出后未归零不应产生新分仓', async () => {
@@ -607,8 +608,9 @@ describe('GET /api/trades/holdings/:symbol/trades', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.body.list).toHaveLength(2);
-    expect(res.body.list[0].type).toBe('BUY');
-    expect(res.body.list[1].type).toBe('SELL');
+    // Holding operations are returned newest-first, like history details.
+    expect(res.body.list[0].type).toBe('SELL');
+    expect(res.body.list[1].type).toBe('BUY');
   });
 });
 

@@ -1,17 +1,51 @@
 const { round2 } = require('./pnl');
 const { normalizeSymbol } = require('./symbol');
 
-const sortTrades = (trades) => [...(trades || [])].sort((a, b) => {
-  const byDate = new Date(a.date) - new Date(b.date);
-  return byDate || String(a._id || '').localeCompare(String(b._id || ''));
-});
-
 const settlement = (trade) => {
   const gross = (Number(trade.price) || 0) * (Number(trade.quantity) || 0);
   return trade.type === 'BUY' ? gross + (Number(trade.commission) || 0) : gross - (Number(trade.commission) || 0);
 };
 
 const fxRate = (trade, rates = {}) => Number(trade.fxRateToCNY) || Number(rates[trade.currency || 'CNY']) || 1;
+
+
+// Replay corporate actions alongside trades without manufacturing executions.
+const sortEvents = (trades, actions = []) => [
+  ...(trades || []).map(trade => ({ ...trade.toObject?.() || trade })),
+  ...actions.map(action => ({ ...action.toObject?.() || action, isCorporateAction: true }))
+].sort((a, b) => new Date(a.date) - new Date(b.date) ||
+  Number(b.isCorporateAction || false) - Number(a.isCorporateAction || false) ||
+  String(a._id || '').localeCompare(String(b._id || '')));
+
+const applyPositionAction = (position, action, rates, diluted = false) => {
+  if (!position || position.quantity <= 0) return;
+  const oldQuantity = position.quantity;
+  const amount = Number(action.cashAmount) || 0;
+  if (['SPLIT', 'REVERSE_SPLIT'].includes(action.type)) {
+    const factor = Number(action.ratioNumerator) / Number(action.ratioDenominator);
+    if (Number.isFinite(factor) && factor > 0) position.quantity *= factor;
+  } else if (['STOCK_DIVIDEND', 'BONUS_ISSUE', 'RIGHTS_ISSUE'].includes(action.type)) {
+    position.quantity += Number(action.quantityChange) || 0;
+  }
+  const cost = action.type === 'RIGHTS_ISSUE' ? amount : 0;
+  if (diluted) {
+    position.netCost += cost - (action.type === 'CASH_DIVIDEND' ? amount : 0);
+    position.dilutedAvgCost = round2(position.netCost / position.quantity);
+    position.avgCost = position.dilutedAvgCost;
+    position.realizedProfitCNY = 0;
+    return;
+  }
+  position.avgCost = (position.avgCost * oldQuantity + cost) / position.quantity;
+  position.avgCostCNY = (position.avgCostCNY * oldQuantity + cost * fxRate(action, rates)) / position.quantity;
+  if (position.buyCost !== undefined) position.buyCost += cost * fxRate(action, rates);
+  if (position.totalBuyCost !== undefined) position.totalBuyCost += cost;
+  if (position.totalBuyCostCNY !== undefined) position.totalBuyCostCNY += cost * fxRate(action, rates);
+  if (action.type === 'CASH_DIVIDEND') {
+    if (position.sellProceeds !== undefined) position.sellProceeds += amount * fxRate(action, rates);
+    if (position.realizedProfit !== undefined) position.realizedProfit += amount;
+    if (position.realizedProfitCNY !== undefined) position.realizedProfitCNY += amount * fxRate(action, rates);
+  }
+};
 
 const ensurePosition = (positions, trade) => {
   const symbol = normalizeSymbol(trade.symbol);
@@ -34,9 +68,10 @@ const ensurePosition = (positions, trade) => {
   return positions.get(symbol);
 };
 
-const calculateWeightedAveragePerformance = ({ trades, rates = {} }) => {
+const calculateWeightedAveragePerformance = ({ trades, actions = [], rates = {} }) => {
   const positions = new Map();
-  sortTrades(trades).forEach((trade) => {
+  sortEvents(trades, actions).forEach((trade) => {
+    if (trade.isCorporateAction) { applyPositionAction(positions.get(normalizeSymbol(trade.symbol)), trade, rates); return; }
     const position = ensurePosition(positions, trade);
     const quantity = Number(trade.quantity) || 0;
     const amount = settlement(trade);
@@ -73,12 +108,13 @@ const calculateWeightedAveragePerformance = ({ trades, rates = {} }) => {
   return positions;
 };
 
-const calculateClosedPositionCycles = ({ trades, rates = {} }) => {
+const calculateClosedPositionCycles = ({ trades, actions = [], rates = {} }) => {
   const cycles = [];
   const positions = new Map();
   const cycleNumber = new Map();
-  sortTrades(trades).forEach((trade) => {
+  sortEvents(trades, actions).forEach((trade) => {
     const key = normalizeSymbol(trade.symbol);
+    if (trade.isCorporateAction) { applyPositionAction(positions.get(key), trade, rates); return; }
     let position = positions.get(key);
     if (!position) {
       position = { quantity: 0, avgCost: 0, avgCostCNY: 0, buyCost: 0, sellProceeds: 0, openedAt: null, tradesCount: 0, trades: [], currency: trade.currency || 'CNY', name: trade.name || key };
@@ -126,16 +162,17 @@ const calculateClosedPositionCycles = ({ trades, rates = {} }) => {
   return cycles;
 };
 
-const calculateDilutedPerformance = ({ trades }) => {
+const calculateDilutedPerformance = ({ trades, actions = [] }) => {
   const bySymbol = new Map();
-  sortTrades(trades).forEach((trade) => {
+  sortEvents(trades, actions).forEach((trade) => {
     const key = normalizeSymbol(trade.symbol);
+    if (trade.isCorporateAction) { applyPositionAction(bySymbol.get(key), trade, {}, true); return; }
     const current = bySymbol.get(key) || { symbol: key, name: trade.name || key, currency: trade.currency || 'CNY', quantity: 0, netCost: 0 };
     const quantity = Number(trade.quantity) || 0;
     const amount = settlement(trade);
     if (trade.type === 'BUY') { current.quantity += quantity; current.netCost += amount; }
     else if (trade.type === 'SELL') { if (quantity > current.quantity) throw new Error('Sell quantity exceeds holding quantity'); current.quantity -= quantity; current.netCost -= amount; }
-    if (current.quantity > 0) bySymbol.set(key, { ...current, dilutedAvgCost: round2(current.netCost / current.quantity) });
+    if (current.quantity > 0) bySymbol.set(key, { ...current, dilutedAvgCost: round2(current.netCost / current.quantity), ...(actions.length ? { avgCost: round2(current.netCost / current.quantity), realizedProfitCNY: 0 } : {}) });
     else bySymbol.delete(key);
   });
   return bySymbol;
@@ -147,7 +184,7 @@ const calculateDilutedProfits = ({ currentPrice, quantity, avgCost, rate = 1 }) 
   return { unrealizedProfit, cumulativeProfit: unrealizedProfit, realizedProfit: 0 };
 };
 
-const calculatePositionZeroGroups = ({ trades, rates = {} }) => calculateClosedPositionCycles({ trades, rates }).map((cycle) => ({
+const calculatePositionZeroGroups = ({ trades, actions = [], rates = {} }) => calculateClosedPositionCycles({ trades, actions, rates }).map((cycle) => ({
   groupId: cycle.cycleId,
   startDate: cycle.openedAt,
   endDate: cycle.closedAt,

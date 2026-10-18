@@ -34,9 +34,9 @@
       </a-form-item>
     </a-form>
     <a-form layout="inline" :model="form" style="margin-bottom: 16px">
-      <a-form-item v-if="ratio"><a-input-number v-model:value="form.ratioNumerator" :min="0.000001" placeholder="拆分后" /></a-form-item>
-      <a-form-item v-if="ratio">:</a-form-item>
       <a-form-item v-if="ratio"><a-input-number v-model:value="form.ratioDenominator" :min="0.000001" placeholder="拆分前" /></a-form-item>
+      <a-form-item v-if="ratio">:</a-form-item>
+      <a-form-item v-if="ratio"><a-input-number v-model:value="form.ratioNumerator" :min="0.000001" placeholder="拆分后" /></a-form-item>
       <a-form-item v-if="quantity"><a-input-number v-model:value="form.quantityChange" :min="0.000001" placeholder="增加份额" /></a-form-item>
       <a-form-item v-if="cash"><a-input-number v-model:value="form.cashAmount" :min="0.01" placeholder="金额/现金支出" /></a-form-item>
       <a-form-item>

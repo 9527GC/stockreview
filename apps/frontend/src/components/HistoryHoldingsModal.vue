@@ -66,24 +66,32 @@
             >
               <template #bodyCell="{ column, record: trade }">
                 <template v-if="column.key === 'type'">
-                  <a-tag :color="trade.type === 'BUY' ? 'red' : 'green'">
+                  <a-tag v-if="trade.type === 'COMPANY_ACTION'" color="purple">{{ actionTypeLabels[trade.actionType] || '其他' }}</a-tag>
+                  <a-tag v-else :color="trade.type === 'BUY' ? 'red' : 'green'">
                     {{ trade.type === 'BUY' ? '买入' : '卖出' }}
                   </a-tag>
                 </template>
                 <template v-if="column.key === 'date'">
                   {{ dayjs(trade.date).format('YYYY-MM-DD HH:mm') }}
                 </template>
-                <template v-if="column.key === 'amount'">
-                  {{ getCurrencySymbol(trade.currency) }}{{ (trade.price * trade.quantity).toFixed(2) }}
+                <template v-if="column.key === 'quantity'">
+                  <span>{{ trade.type === 'COMPANY_ACTION' ? formatSignedNumber(trade.quantityChange) : trade.quantity }}</span>
+                </template>
+                <template v-if="column.key === 'price'">
+                  <span>{{ trade.type === 'COMPANY_ACTION' ? formatActionDetails(trade) : `${getCurrencySymbol(trade.currency)}${Number(trade.price || 0).toFixed(2)}` }}</span>
                 </template>
                 <template v-if="column.key === 'action'">
-                  <a-button type="link" size="small" @click="handleEdit(trade, record)">编辑</a-button>
-                  <a-popconfirm
-                    title="确定要删除这条交易记录吗？"
-                    @confirm="handleDeleteTrade(trade.id, record)"
-                  >
-                    <a-button type="link" danger size="small">删除</a-button>
-                  </a-popconfirm>
+                  <template v-if="trade.type !== 'COMPANY_ACTION'">
+                    <a-button type="link" size="small" @click="handleEdit(trade, record)">编辑</a-button>
+                    <a-popconfirm
+                      title="确定要删除这条交易记录吗？"
+                      @confirm="handleDeleteTrade(trade.id, record)"
+                    >
+                      <a-button type="link" danger size="small">删除</a-button>
+                    </a-popconfirm>
+                  </template>
+                  <template v-else><a-button type="link" size="small" @click="handleEditAction(trade, record)">编辑</a-button><a-popconfirm title="确定要删除这条公司行动吗？" @confirm="handleDeleteCompanyAction(trade.id, record)"><a-button type="link" danger size="small">删除</a-button></a-popconfirm></template>
+
                 </template>
               </template>
             </a-table>
@@ -123,6 +131,8 @@
     </a-table>
   </a-modal>
 
+  <CompanyActionModal v-model:open="actionEditModalOpen" mode="edit" :action="editingAction" @success="onActionEditSuccess" />
+
   <TradeModal
     v-model:open="editModalOpen"
     mode="edit"
@@ -134,12 +144,13 @@
 <script setup>
 import { computed, ref, watch } from 'vue';
 import { useTradeStore } from '@/stores/trade';
-import { getHistoryHoldings, getHistoryHoldingGroups } from '@/api/index';
+import { getHistoryHoldings, getHistoryHoldingGroups, deleteCompanyAction } from '@/api/index';
 import { message } from 'ant-design-vue';
 import dayjs from 'dayjs';
 import { normalizeSymbol } from '@/utils/stock';
 import { getHistoryCycleKey, selectHistoryCycleGroups } from '@/utils/historyCycles';
 import TradeModal from './TradeModal.vue';
+import CompanyActionModal from './CompanyActionModal.vue';
 
 const props = defineProps({
   open: Boolean
@@ -162,6 +173,9 @@ const editModalOpen = ref(false);
 const editingTrade = ref(null);
 const editingSymbol = ref('');
 const editingCycle = ref(null);
+const actionEditModalOpen = ref(false);
+const editingAction = ref(null);
+
 
 const pagination = computed(() => ({
   current: currentPage.value,
@@ -362,6 +376,12 @@ const columns = [
   { title: '操作', key: 'action', width: 100, align: 'center' }
 ];
 
+const actionTypeLabels = { DIVIDEND: '现金分红', SPLIT: '拆股', MERGER: '合并', BONUS: '送股/转增', RIGHTS: '配股', OTHER: '其他' };
+
+const formatSignedNumber = (value) => {
+  const number = Number(value) || 0;
+  return `${number > 0 ? '+' : ''}${number}`;
+};
 const getCurrencySymbol = (currency) => {
   const map = {
     'CNY': '¥',
@@ -371,15 +391,17 @@ const getCurrencySymbol = (currency) => {
   return map[currency] || '¥';
 };
 
+const formatActionDetails = (action) => { if (action.actionType === 'DIVIDEND') return '每股分红 ' + getCurrencySymbol(action.currency) + Number(action.cashPerShare || 0).toFixed(4); if (action.actionType === 'SPLIT' || action.actionType === 'MERGER') return (action.beforeQuantity || action.ratioNumerator || '--') + ' : ' + (action.afterQuantity || action.ratioDenominator || '--'); if (action.actionType === 'BONUS') return '每 ' + (action.beforeQuantity || '--') + ' 股送转 ' + (action.bonusQuantity || 0) + ' 股'; return action.description || '--'; };
+const handleEditAction = (action, cycle) => { editingCycle.value = cycle; editingAction.value = action; actionEditModalOpen.value = true; };
+const handleDeleteCompanyAction = async (id, cycle) => { try { await deleteCompanyAction(id); message.success('公司行动已删除'); await fetchExpandedGroups(cycle); fetchHistoryHoldings(); emit('changed', cycle.symbol); } catch (err) { message.error('删除失败'); } };
+const onActionEditSuccess = async (symbol) => { actionEditModalOpen.value = false; editingAction.value = null; if (editingCycle.value) await fetchExpandedGroups(editingCycle.value); editingCycle.value = null; fetchHistoryHoldings(); emit('changed', symbol); };
+
 const innerColumns = [
-  { title: '交易时间', key: 'date', width: 160 },
-  { title: '类型', key: 'type', width: 80 },
-  { title: '价格', dataIndex: 'price', key: 'price', align: 'right' },
-  { title: '数量', dataIndex: 'quantity', key: 'quantity', align: 'right' },
-  { title: '金额', key: 'amount', align: 'right' },
-  { title: '手续费', dataIndex: 'commission', key: 'commission', align: 'right' },
-  { title: '交易逻辑', dataIndex: 'logic', key: 'logic', ellipsis: true },
-  { title: '操作', key: 'action', width: 120, align: 'center' }
+  { title: '操作', key: 'type', width: 110 },
+  { title: '数量', key: 'quantity', align: 'right', width: 110 },
+  { title: '成交价', key: 'price', align: 'right', width: 220, ellipsis: true },
+  { title: '日期', key: 'date', width: 160 },
+  { title: '操作', key: 'action', width: 140, align: 'center' }
 ];
 
 watch(

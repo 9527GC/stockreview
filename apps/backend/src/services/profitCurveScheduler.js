@@ -424,7 +424,7 @@ class ProfitCurveScheduler {
           CorporateAction.find({ userId: user._id })
         ]);
         const rates = await getRates();
-        const perfMap = calculateWeightedAveragePerformance({ trades, rates });
+        const perfMap = calculateWeightedAveragePerformance({ trades, actions, rates });
         const holdings = [];
 
         perfMap.forEach((perf, symbol) => {

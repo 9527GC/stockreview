@@ -93,13 +93,13 @@
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'type'">
-                <a-tag v-if="record.type === 'COMPANY_ACTION'" color="purple">公司行动</a-tag>
+                <a-tag v-if="record.type === 'COMPANY_ACTION'" color="purple">{{ actionTypeLabels[record.actionType] || '其他' }}</a-tag>
                 <a-tag v-else :color="record.type === 'BUY' ? 'red' : 'green'">
                   {{ record.type === 'BUY' ? '买入' : '卖出' }}
                 </a-tag>
               </template>
               <template v-if="column.key === 'price'">
-                <span v-if="record.type === 'COMPANY_ACTION'">{{ record.description || '--' }}</span><span v-else>{{ currencySymbol }}{{ Number(record.price || 0).toFixed(2) }}</span>
+                <span v-if="record.type === 'COMPANY_ACTION'">{{ formatActionDetails(record) }}</span><span v-else>{{ currencySymbol }}{{ Number(record.price || 0).toFixed(2) }}</span>
               </template>
               <template v-if="column.key === 'date'">
                 {{ dayjs(record.date).format('YYYY-MM-DD HH:mm') }}
@@ -162,6 +162,8 @@ const currentPage = ref(1);
 const pageSize = ref(20);
 const total = ref(0);
 const hasTotal = ref(false);
+const actionTypeLabels = { DIVIDEND: '现金分红', SPLIT: '拆股', MERGER: '合并', BONUS: '送股/转增', RIGHTS: '配股', OTHER: '其他' };
+
 const tableScrollY = computed(() => (hasTotal.value ? 'calc(80vh - 360px)' : 'calc(80vh - 310px)'));
 
 const parseListResponse = (res) => {
@@ -171,6 +173,13 @@ const parseListResponse = (res) => {
   if (res.data && Array.isArray(res.data.list)) return { list: res.data.list, total: res.data.total ?? res.data.count };
   return { list: [], total: res.total ?? res.count };
 };
+
+// Keep the UI newest-first even if an older API deployment returns records in ascending order.
+const sortOperationsNewestFirst = (list) => [...(list || [])].sort((a, b) => {
+  const timeDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+  if (timeDiff !== 0) return timeDiff;
+  return String(b.id || b._id || '').localeCompare(String(a.id || a._id || ''));
+});
 
 const fetchOperations = async () => {
   const symbol = normalizeSymbol(props.holding?.symbol);
@@ -182,7 +191,7 @@ const fetchOperations = async () => {
     const res = await getCurrentHoldingTrades(symbol);
     console.log('[fetchOperations] response:', res);
     const parsed = parseListResponse(res);
-    operations.value = parsed.list || [];
+    operations.value = sortOperationsNewestFirst(parsed.list);
     if (typeof parsed.total === 'number') {
       total.value = parsed.total;
       hasTotal.value = true;
@@ -314,10 +323,17 @@ const handleDelete = async (record) => {
   }
 };
 
+const formatActionDetails = (action) => {
+  if (action.actionType === 'DIVIDEND') return '每股分红 ' + currencySymbol.value + Number(action.cashPerShare || 0).toFixed(4);
+  if (action.actionType === 'SPLIT' || action.actionType === 'MERGER') return (action.beforeQuantity || action.ratioNumerator || '--') + ' : ' + (action.afterQuantity || action.ratioDenominator || '--');
+  if (action.actionType === 'BONUS') return '每 ' + (action.beforeQuantity || '--') + ' 股送转 ' + (action.bonusQuantity || 0) + ' 股';
+  return action.description || '--';
+};
+
 const columns = [
-  { title: '类型', key: 'type', width: 80 },
-  { title: '数量', dataIndex: 'quantity', key: 'quantity', align: 'right', width: 100 },
-  { title: '成交价', key: 'price', align: 'right', width: 120 },
+  { title: '操作', key: 'type', width: 100 },
+  { title: '数量', key: 'quantity', align: 'right', width: 100 },
+  { title: '成交价', key: 'price', align: 'right', width: 180 },
   { title: '日期', key: 'date', width: 160 },
   { title: '操作', key: 'action', width: 120, align: 'center', fixed: 'right' }
 ];

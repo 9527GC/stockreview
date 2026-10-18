@@ -123,7 +123,6 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
   let prevCumulativeReturn = 0;
   let prevTotalAssets = null;
   let tradeIndex = 0;
-  let actionIndex = 0;
   let recomputeStartDate = startDateStr;
 
   // 尝试使用 startDateStr 前一天的缓存作为起点，实现增量回填
@@ -134,10 +133,19 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
     prevTotalAssets = Number.isFinite(prevRecord.totalAssets) ? Number(prevRecord.totalAssets) : null;
     prevCumulativeReturn = Number.isFinite(prevRecord.cumulativeReturn) ? Number(prevRecord.cumulativeReturn) : 0;
 
-    // 应用截止到前一天的所有交易
-    while (tradeIndex < tradesAsc.length && dateStrOf(tradesAsc[tradeIndex].date) <= prevDateStr) {
-      applyTradeToHoldings(currentHoldings, tradesAsc[tradeIndex]);
-      tradeIndex++;
+    // Replay both streams chronologically so incremental backfills retain prior splits.
+    const priorEvents = [
+      ...tradesAsc.filter(t => dateStrOf(t.date) <= prevDateStr).map(t => ({ record: t, action: false })),
+      ...actionsAsc.filter(a => dateStrOf(a.date) <= prevDateStr).map(a => ({ record: a, action: true }))
+    ].sort((a, b) => new Date(a.record.date) - new Date(b.record.date) || Number(b.action) - Number(a.action));
+    for (const event of priorEvents) {
+      if (event.action) applyCorporateActionToHoldings(currentHoldings, event.record);
+      else { applyTradeToHoldings(currentHoldings, event.record); tradeIndex++; }
+    }
+    for (const action of actionsAsc.filter(a => dateStrOf(a.date) <= prevDateStr)) {
+      const amountCNY = (Number(action.cashAmount) || 0) * (rates[action.currency || 'CNY'] || 1);
+      if (action.type === 'CASH_DIVIDEND') cashCNY += amountCNY;
+      if (action.type === 'RIGHTS_ISSUE') cashCNY -= amountCNY;
     }
 
     // 交易和转账的历史人民币金额必须来自其写入时锁定的字段，不能用当前汇率回算。
@@ -204,7 +212,6 @@ const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT
   const dailyRevenues = [];
   // Non-trading days have no quote. Carry the last valid close forward
   // instead of falling back to cost every day, which creates weekend troughs.
-  const lastKnownPrices = new Map();
 
   for (const dateStr of dates) {
     // 公司行动在当日成交前生效。拆分/送转不改变现金；分红增加现金；配股减少现金。

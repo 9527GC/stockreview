@@ -35,7 +35,7 @@ const addCash = (cashBalances, currency, amount) => {
   cashBalances[currency] = toMoney(cashBalances[currency] + amount);
 };
 
-const buildLedger = ({ transfers = [], trades = [] } = {}) => {
+const buildLedger = ({ transfers = [], trades = [], actions = [] } = {}) => {
   const cashBalances = normalizeCashBalances();
   let principalCNY = 0;
   const transferFlowsByDate = new Map();
@@ -80,11 +80,18 @@ const buildLedger = ({ transfers = [], trades = [] } = {}) => {
     addCash(cashBalances, currency, toMoney(sign * netSettlementAmount));
   });
 
+  actions.forEach(action => {
+    if (!['CASH_DIVIDEND', 'RIGHTS_ISSUE'].includes(action.type)) return;
+    const currency = readCurrency(action, 'CorporateAction');
+    const amount = Number(action.cashAmount);
+    if (!Number.isFinite(amount) || amount < 0) throw new Error('CorporateAction has invalid cashAmount');
+    addCash(cashBalances, currency, action.type === 'RIGHTS_ISSUE' ? -amount : amount);
+  });
   return { cashBalances, principalCNY, transferFlowsByDate };
 };
 
-const calculateCashAndPrincipalCNY = ({ transfers, trades, rates }) => {
-  const ledger = buildLedger({ transfers, trades });
+const calculateCashAndPrincipalCNY = ({ transfers, trades, actions = [], rates }) => {
+  const ledger = buildLedger({ transfers, trades, actions });
   return {
     cashCNY: sumCashBalancesCNY(ledger.cashBalances, rates),
     principalCNY: ledger.principalCNY

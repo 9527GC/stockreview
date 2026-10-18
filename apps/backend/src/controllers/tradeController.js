@@ -13,6 +13,7 @@ const { getCurrencyForMarket } = require('../utils/marketCurrency');
 const { round2, calculateDailyProfitFromPosition } = require('../utils/pnl');
 const { normalizeSymbol, buildSymbolAliases } = require('../utils/symbol');
 const { calculateWeightedAveragePerformance, calculateClosedPositionCycles, calculateDilutedPerformance, calculateDilutedProfits, calculatePositionZeroGroups } = require('../utils/cost');
+const { compareByDateAndId, getImpactingActions, addActionsToHoldingGroups } = require('../utils/companyActions');
 const { upsertTodayDailyProfit } = require('../utils/dailyProfitBackfill');
 const { sanitizeHtml } = require('../utils/sanitizeHtml');
 const { getDateStringInOffset, getQuoteDateKeyInOffset } = require('../utils/dailyProfit');
@@ -91,15 +92,21 @@ const calculateCommission = ({ price, quantity, feeMode, feeRate, feeAmount, com
  * 校验编辑某条交易的数量后，全账本是否会出现超卖
  * @returns {Promise<{valid: boolean, message?: string}>}
  */
-const validateLedgerTrades = (trades) => {
+const validateLedgerTrades = (trades, actions = []) => {
   const holdings = new Map();
-  const ordered = [...trades].sort((a, b) => {
+  const ordered = [...trades, ...actions.map(a => ({ ...a, isCorporateAction: true }))].sort((a, b) => {
     const byDate = new Date(a.date) - new Date(b.date);
-    return byDate || String(a._id || '').localeCompare(String(b._id || ''));
+    return byDate || Number(b.isCorporateAction || false) - Number(a.isCorporateAction || false) || String(a._id || '').localeCompare(String(b._id || ''));
   });
 
   for (const trade of ordered) {
     const symbol = normalizeSymbol(trade.symbol);
+    if (trade.isCorporateAction) {
+      const quantity = holdings.get(symbol) || 0;
+      if (quantity > 0 && ['SPLIT', 'REVERSE_SPLIT'].includes(trade.type)) holdings.set(symbol, quantity * trade.ratioNumerator / trade.ratioDenominator);
+      if (quantity > 0 && ['STOCK_DIVIDEND', 'BONUS_ISSUE', 'RIGHTS_ISSUE'].includes(trade.type)) holdings.set(symbol, quantity + (Number(trade.quantityChange) || 0));
+      continue;
+    }
     const quantity = Number(trade.quantity);
     if (!Number.isFinite(quantity) || quantity <= 0) return { valid: false, message: messages.QUANTITY_MUST_BE_POSITIVE };
     if (trade.type === 'BUY') {
@@ -117,10 +124,10 @@ const validateLedgerTrades = (trades) => {
 };
 
 const validateCandidateLedger = async ({ userId, candidateTrade, excludedTradeId }) => {
-  const trades = await Trade.find({ userId }).lean();
+  const [trades, actions] = await Promise.all([Trade.find({ userId }).lean(), CorporateAction.find({ userId }).lean()]);
   const candidateTrades = trades.filter((trade) => String(trade._id) !== String(excludedTradeId));
   if (candidateTrade) candidateTrades.push(candidateTrade.toObject ? candidateTrade.toObject() : candidateTrade);
-  return validateLedgerTrades(candidateTrades);
+  return validateLedgerTrades(candidateTrades, actions);
 };
 
 const validateTradeEditQuantity = async ({ userId, editedTradeId, updates }) => {
@@ -131,14 +138,14 @@ const validateTradeEditQuantity = async ({ userId, editedTradeId, updates }) => 
 };
 
 const rebuildAssetFromLedger = async (userId) => {
-  const [tradesAsc, existingHoldings] = await Promise.all([
+  const [tradesAsc, actionsAsc, existingHoldings] = await Promise.all([
     Trade.find({ userId }).sort({ date: 1, _id: 1 }),
     CorporateAction.find({ userId }).sort({ date: 1, _id: 1 }),
     Holding.find({ userId })
   ]);
 
   const existingBySymbol = new Map(existingHoldings.map(h => [normalizeSymbol(h.symbol), h]));
-  const performanceBySymbol = calculateWeightedAveragePerformance({ trades: tradesAsc, rates: await getRates() });
+  const performanceBySymbol = calculateWeightedAveragePerformance({ trades: tradesAsc, actions: actionsAsc, rates: await getRates() });
   const targetBySymbol = new Map();
   performanceBySymbol.forEach((perf) => {
     if (perf.quantity <= 0) return;
@@ -193,7 +200,7 @@ const rebuildAssetFromLedger = async (userId) => {
   // All asset values and cached close prices are written through the sole valuation entry point.
   await refreshAssetMarketValue(userId);
 };
-const buildTradePerformanceBySymbol = ({ trades, rates }) => calculateWeightedAveragePerformance({ trades, rates });
+const buildTradePerformanceBySymbol = ({ trades, actions = [], rates }) => calculateWeightedAveragePerformance({ trades, actions, rates });
 
 const getTradeSnapshotView = (trade) => {
   const snapshot = normalizeMarketOverviewSnapshot(trade?.marketOverviewSnapshot || trade?.marketOverview);
@@ -224,8 +231,8 @@ exports.getHoldings = async (req, res) => {
       CorporateAction.find({ userId }).sort({ date: 1, _id: 1 })
     ]);
     const cashCNY = asset?.cash || 0;
-    const performanceBySymbol = buildTradePerformanceBySymbol({ trades: tradesAsc, rates: RATES });
-    const dilutedPerformanceBySymbol = calculateDilutedPerformance({ trades: tradesAsc, rates: RATES });
+    const performanceBySymbol = buildTradePerformanceBySymbol({ trades: tradesAsc, actions: actionsAsc, rates: RATES });
+    const dilutedPerformanceBySymbol = calculateDilutedPerformance({ trades: tradesAsc, actions: actionsAsc, rates: RATES });
 
     // 计算每只股票最近一次交易时间，用于前端默认排序
     const lastTradeDateBySymbol = new Map();
@@ -384,8 +391,7 @@ exports.getCurrentHoldingTrades = async (req, res) => {
       userId: String(userId)
     });
 
-    const [rates, trades, companyActions] = await Promise.all([
-      getRates(),
+    const [trades, companyActions] = await Promise.all([
       Trade.find({ userId, symbol: { $in: symbolSet } }).sort({ date: 1, _id: 1 }).lean(),
       CompanyAction.find({ userId, symbol: { $in: symbolSet } }).sort({ date: 1, _id: 1 }).lean()
     ]);
@@ -424,7 +430,8 @@ exports.getCurrentHoldingTrades = async (req, res) => {
 
     const currentBatchTrades = currentBatchStartIndex === -1 ? [] : sortedTrades.slice(currentBatchStartIndex);
     const batchStartDate = currentBatchTrades[0]?.date ? new Date(currentBatchTrades[0].date) : null;
-    const visibleActions = companyActions.filter(a => !batchStartDate || new Date(a.date) >= batchStartDate);
+    const visibleActions = getImpactingActions({ trades, actions: companyActions })
+      .filter(action => !batchStartDate || new Date(action.date) >= batchStartDate);
 
     console.log('[getCurrentHoldingTrades] current batch count:', currentBatchTrades.length, 'actions:', visibleActions.length, 'runningQty:', runningQty);
 
@@ -457,8 +464,9 @@ exports.getCurrentHoldingTrades = async (req, res) => {
       };
     });
 
-    const actionList = visibleActions.map(a => ({ id: String(a._id), symbol: a.symbol, name: a.name, stockName: a.name, date: a.date, type: 'COMPANY_ACTION', actionType: a.type, description: a.description, quantityChange: a.quantityChange || 0, cashAmount: a.cashAmount || 0, currency: a.currency || 'CNY', price: null, quantity: a.quantityChange || 0, commission: 0, logic: a.description }));
-    const list = [...tradeList, ...actionList].sort((a, b) => new Date(a.date) - new Date(b.date));
+    const actionList = visibleActions;
+
+    const list = [...tradeList, ...actionList].sort((a, b) => compareByDateAndId(b, a));
 
     res.json({ list, total: list.length });
   } catch (error) {
@@ -608,13 +616,13 @@ exports.getHistoryHoldings = async (req, res) => {
     const userId = req.user._id;
     const { page = 1, pageSize = 20, sort = '-lastTradeDate' } = req.query;
 
-    const [rates, trades] = await Promise.all([
+    const [rates, trades, actions] = await Promise.all([
       getRates(),
       Trade.find({ userId }).sort({ date: 1, _id: 1 }),
       CorporateAction.find({ userId }).sort({ date: 1, _id: 1 })
     ]);
 
-    const closed = calculateClosedPositionCycles({ trades, rates });
+    const closed = calculateClosedPositionCycles({ trades, actions, rates });
 
     const sortStr = String(sort || '-lastTradeDate');
     const desc = sortStr.startsWith('-');
@@ -679,12 +687,17 @@ exports.getHistoryHoldingGroups = async (req, res) => {
     const aliases = buildSymbolAliases(normalizedSymbol);
     const symbolSet = Array.from(new Set([normalizedSymbol, ...aliases]));
 
-    const [rates, trades] = await Promise.all([
+    const [rates, trades, actions] = await Promise.all([
       getRates(),
-      Trade.find({ userId, symbol: { $in: symbolSet } }).sort({ date: 1, _id: 1 }).lean()
+      Trade.find({ userId, symbol: { $in: symbolSet } }).sort({ date: 1, _id: 1 }).lean(),
+      CompanyAction.find({ userId, symbol: { $in: symbolSet } }).sort({ date: 1, _id: 1 }).lean()
     ]);
 
-    const groups = calculatePositionZeroGroups({ trades, rates });
+    const groups = addActionsToHoldingGroups({
+      groups: calculatePositionZeroGroups({ trades, rates }),
+      trades,
+      actions
+    });
 
     res.json({ list: groups });
   } catch (error) {
@@ -715,12 +728,14 @@ exports.batchGetHistoryHoldingGroups = async (req, res) => {
       })
     ));
 
-    const [rates, trades] = await Promise.all([
+    const [rates, trades, actions] = await Promise.all([
       getRates(),
-      Trade.find({ userId, symbol: { $in: allSymbols } }).sort({ date: 1, _id: 1 }).lean()
+      Trade.find({ userId, symbol: { $in: allSymbols } }).sort({ date: 1, _id: 1 }).lean(),
+      CompanyAction.find({ userId, symbol: { $in: allSymbols } }).sort({ date: 1, _id: 1 }).lean()
     ]);
 
     const tradesBySymbol = new Map();
+    const actionsBySymbol = new Map();
     trades.forEach((t) => {
       const key = normalizeSymbol(t.symbol);
       if (!tradesBySymbol.has(key)) {
@@ -728,10 +743,22 @@ exports.batchGetHistoryHoldingGroups = async (req, res) => {
       }
       tradesBySymbol.get(key).push(t);
     });
+    actions.forEach((action) => {
+      const key = normalizeSymbol(action.symbol);
+      if (!actionsBySymbol.has(key)) {
+        actionsBySymbol.set(key, []);
+      }
+      actionsBySymbol.get(key).push(action);
+    });
 
     const list = normalizedSymbols.map((symbol) => {
       const symbolTrades = tradesBySymbol.get(symbol) || [];
-      const groups = calculatePositionZeroGroups({ trades: symbolTrades, rates });
+      const symbolActions = actionsBySymbol.get(symbol) || [];
+      const groups = addActionsToHoldingGroups({
+        groups: calculatePositionZeroGroups({ trades: symbolTrades, rates }),
+        trades: symbolTrades,
+        actions: symbolActions
+      });
       return { symbol, groups };
     });
 

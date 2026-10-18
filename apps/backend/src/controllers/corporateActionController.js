@@ -24,7 +24,7 @@ const validate = (body) => {
 
 const recalc = async (userId, date) => {
   await rebuildAssetFromLedger(userId);
-  await dirtyDataManager.markDirtyFromDate(userId, date.toISOString().slice(0, 10));
+  await dirtyDataManager.markDirtyFromDate(userId, getDateStringInOffset(480, date));
   const run = dirtyDataManager.asyncRecalculate(userId);
   if (process.env.NODE_ENV === 'test') await run; else run.catch(console.error);
 };

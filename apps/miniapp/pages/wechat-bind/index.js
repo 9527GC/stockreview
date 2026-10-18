@@ -113,7 +113,7 @@ Page({
     this.setData({ status: 'loading', title: '正在绑定微信', message: '正在验证微信身份，请稍候…' });
     wx.login({
       success: ({ code }) => this.bind(code, { nickName: nickname, avatarUrl: avatar }),
-      fail: () => this.showRescanError('微信登录失败，请重新扫码后再试。')
+      fail: (error = {}) => this.showRescanError(`微信登录失败：${error.errMsg || '未知原因'}，请重新扫码后再试。`)
     });
   },
   authorizeAndBind() {
@@ -149,7 +149,7 @@ Page({
             });
             wx.login({
               success: ({ code }) => this.bind(code, userInfo),
-              fail: () => this.showRescanError('微信登录失败，请重新扫码后再试。')
+              fail: (error = {}) => this.showRescanError(`微信登录失败：${error.errMsg || '未知原因'}，请重新扫码后再试。`)
             });
           }
         });      },
@@ -190,9 +190,9 @@ Page({
           });
           return;
         }
-        this.showRescanError(data?.message || '绑定失败，请重新扫码。');
+        this.showRescanError(`${data?.message || '绑定失败，请重新扫码。'}（HTTP ${statusCode}）`);
       },
-      fail: () => this.showRescanError('无法连接服务，请检查网络后重新扫码。')
+      fail: (error = {}) => this.showRescanError(`无法连接服务：${error.errMsg || '未知网络错误'}，请检查网络后重新扫码。`)
     });
   },
 

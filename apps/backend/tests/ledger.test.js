@@ -193,3 +193,14 @@ describe('locked ledger regression protection', () => {
       .toThrow(/Transfer.*fxRateToCNY/i);
   });
 });
+
+ test('公司行动现金进入分币种账本但不改变外部本金', () => {
+  const ledger = buildLedger({ actions: [
+    { type: 'CASH_DIVIDEND', currency: 'USD', cashAmount: 15 },
+    { type: 'RIGHTS_ISSUE', currency: 'HKD', cashAmount: 20 },
+    { type: 'SPLIT', currency: 'CNY', ratioNumerator: 2, ratioDenominator: 1 }
+  ] });
+  expect(ledger.cashBalances).toEqual({ CNY: 0, HKD: -20, USD: 15 });
+  expect(ledger.principalCNY).toBe(0);
+  expect(ledger.transferFlowsByDate.size).toBe(0);
+ });

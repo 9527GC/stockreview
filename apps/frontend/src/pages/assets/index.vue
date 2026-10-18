@@ -135,10 +135,18 @@
             <a-radio-button value="US">美股</a-radio-button>
           </a-radio-group>
         </div>
-        <div style="display: flex; gap: 8px;"><a-button @click="showCorporateActionModal">公司行动</a-button><a-button @click="showHistoryModal">
-          <template #icon><HistoryOutlined /></template>
-          查看历史持仓
-        </a-button></div>
+        <div style="display: flex; gap: 8px;">
+          <a-button @click="showCorporateActionModal">公司行动管理</a-button>
+          <a-button @click="showCompanyAction">
+            <template #icon><ThunderboltOutlined /></template>
+            添加公司行动
+          </a-button>
+          <a-button @click="showHistoryModal">
+            <template #icon><HistoryOutlined /></template>
+            查看历史持仓
+          </a-button>
+        </div>
+
       </div>
       <a-table
         :columns="columns"
@@ -237,7 +245,7 @@
           <template v-if="column.key === 'action'">
             <div style="white-space: nowrap; display: flex; gap: 8px; justify-content: center;">
               <a-button type="link" size="small" @click="showHoldingDetail(record)" style="padding: 0 4px; color: #1890ff;">明细</a-button>
-              <a-button type="link" size="small" @click="showCompanyAction(record)" style="padding: 0 4px; color: #722ed1;">行动</a-button>
+
               <a-button type="link" size="small" danger @click="handleDelete(record)" style="padding: 0 4px;">删除</a-button>
             </div>
           </template>
@@ -247,7 +255,7 @@
 
     <HistoryHoldingsModal v-model:open="isHistoryModalVisible" @deleted="handleHistoryChanged" @changed="handleHistoryChanged" />
     <HoldingDetailModal v-model:open="isHoldingDetailModalVisible" :holding="selectedHolding" @changed="handleHoldingChanged" />
-    <CompanyActionModal v-model:open="isCompanyActionModalVisible" :holding="selectedHolding" @success="handleHoldingChanged" />
+    <CompanyActionModal v-model:open="isCompanyActionModalVisible" @success="handleHoldingChanged" />
     <TransferModal v-model:open="isTransferModalVisible" @success="handleTransferSuccess" />
     <CorporateActionModal v-model:open="isCorporateActionModalVisible" @changed="handleCorporateActionChanged" />
     </div>
@@ -266,7 +274,7 @@ import HoldingDetailModal from '@/components/HoldingDetailModal.vue';
 import CompanyActionModal from '@/components/CompanyActionModal.vue';
 import { useTradeStore } from '@/stores/trade';
 import { getProfitCurve } from '@/api/index';
-import { ArrowUpOutlined, ArrowDownOutlined, HistoryOutlined } from '@ant-design/icons-vue';
+import { ArrowUpOutlined, ArrowDownOutlined, HistoryOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
 import { message, Modal } from 'ant-design-vue';
 import dayjs from 'dayjs';
 import { normalizeSymbol } from '@/utils/stock';
@@ -325,7 +333,7 @@ const getHoldingMarket = (record) => {
   return 'CN';
 };
 
-const showCompanyAction = (record) => { selectedHolding.value = record; isCompanyActionModalVisible.value = true; };
+const showCompanyAction = () => { isCompanyActionModalVisible.value = true; };
 
 const handleMarketChange = () => {
   currentPage.value = 1;

@@ -1,4 +1,5 @@
 const { Holding, Trade } = require('../models/Trade');
+const { CorporateAction } = require('../models/CorporateAction');
 const Transfer = require('../models/Transfer');
 const { Asset } = require('../models/Asset');
 const { getRates } = require('./currency');
@@ -19,15 +20,16 @@ const buildFallbackPrices = (holdings) => holdings.reduce((prices, holding) => {
 }, {});
 
 const refreshAssetMarketValue = async (userId) => {
-  const [holdings, transfers, trades, rates] = await Promise.all([
+  const [holdings, transfers, trades, rates, actions] = await Promise.all([
     Holding.find({ userId }),
     Transfer.find({ userId }).sort({ date: 1, _id: 1 }),
     Trade.find({ userId }).sort({ date: 1, _id: 1 }),
-    getRates()
+    getRates(),
+    CorporateAction.find({ userId }).sort({ date: 1, _id: 1 })
   ]);
   const quotes = await getQuotes(holdings.map((holding) => holding.symbol));
   const valuation = valuatePortfolio({
-    cashBalances: buildLedger({ transfers, trades }).cashBalances,
+    cashBalances: buildLedger({ transfers, trades, actions }).cashBalances,
     holdings,
     quotes,
     rates,
@@ -62,7 +64,7 @@ const refreshAssetMarketValue = async (userId) => {
   let asset = await Asset.findOne({ userId });
   if (!asset) asset = new Asset({ userId });
 
-  const ledger = buildLedger({ transfers, trades });
+  const ledger = buildLedger({ transfers, trades, actions });
   asset.cashBalances = valuation.cashByCurrency;
   asset.cash = valuation.cashCNY;
   asset.currentPrincipal = ledger.principalCNY;

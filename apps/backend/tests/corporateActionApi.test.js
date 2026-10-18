@@ -50,6 +50,13 @@ describe('公司行动 API', () => {
     expect(holding.quantity).toBe(8000);
     expect(holding.avgCost).toBe(0.5);
     expect(await Trade.countDocuments({ userId, symbol: '159516.SZ' })).toBe(1);
+    // The merged ledger must allow selling shares created by the split.
+    const sell = await request(app).post('/api/trades').set(auth()).send({
+      symbol: '159516.SZ', name: '半导体设备ETF国泰', type: 'SELL', price: 0.6, quantity: 8000,
+      commission: 0, currency: 'CNY', date: '2026-04-11T09:30:00+08:00'
+    });
+    expect(sell.statusCode).toBe(201);
+    expect(await Holding.countDocuments({ userId, symbol: '159516.SZ' })).toBe(0);
   });
 
   test('同一证券同一日期的公司行动拒绝重复新增', async () => {

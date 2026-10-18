@@ -7,7 +7,7 @@
 ```bash
 cd apps/frontend
 cp .env.production.example .env.production
-# Confirm .env.production uses https://stock.gc9527.com, never test-stock.gc9527.com
+# Confirm `.env.production` uses the production API `https://stock.gc9527.com`. Local development uses `.env.development`; there is no staging build.
 rm -rf dist
 npm run build:h5
 ```
