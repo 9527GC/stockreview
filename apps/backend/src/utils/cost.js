@@ -1,3 +1,4 @@
+const { compareTradeSettlement } = require('./tradeSettlementOrder');
 const { round2 } = require('./pnl');
 const { normalizeSymbol } = require('./symbol');
 
@@ -15,7 +16,7 @@ const sortEvents = (trades, actions = []) => [
   ...actions.map(action => ({ ...action.toObject?.() || action, isCorporateAction: true }))
 ].sort((a, b) => new Date(a.date) - new Date(b.date) ||
   Number(b.isCorporateAction || false) - Number(a.isCorporateAction || false) ||
-  String(a._id || '').localeCompare(String(b._id || '')));
+  compareTradeSettlement(a, b));
 
 const applyPositionAction = (position, action, rates, diluted = false) => {
   if (!position || position.quantity <= 0) return;

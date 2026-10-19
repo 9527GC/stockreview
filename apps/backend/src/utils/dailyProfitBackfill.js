@@ -102,6 +102,8 @@ const applyCorporateActionToHoldings = (holdings, action) => {
  * 3. 历史行情通过 HistoricalQuote 缓存批量获取，减少外部请求
  */
 const backfillDailyProfit = async (userId, startDateStr, offsetMinutes = DEFAULT_OFFSET_MINUTES) => {
+  const compatibleReplay = require('./historyReplayBackfill');
+  if (compatibleReplay.enabled(userId)) return compatibleReplay.backfill(userId, startDateStr, offsetMinutes);
   const todayStr = getDateStringInOffset(offsetMinutes);
 
   if (!startDateStr || startDateStr > todayStr) {

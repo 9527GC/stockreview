@@ -14,6 +14,7 @@ const tradeSchema = new mongoose.Schema({
   symbol: { type: String, required: true },
   name: { type: String, required: true },
   date: { type: Date, required: true },
+  settlementOrder: { type: Number, default: null }, // 显式历史结算顺序，不是成交时间
   type: { type: String, enum: ['BUY', 'SELL'], required: true },
   price: { type: Number, required: true },
   quantity: { type: Number, required: true },
