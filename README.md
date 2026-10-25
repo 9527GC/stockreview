@@ -7,7 +7,8 @@
 - `apps/frontend`：H5 前端
 - `apps/miniapp`：微信小程序
 - `apps/backend`：Node.js 后端
-- `docs`：接口与运维文档
+- `packages/stock-search`：前后端共享的证券搜索与代码匹配包
+- `docs`：接口、产品现状与维护文档
 
 ## 技术栈
 
@@ -25,7 +26,24 @@
 
 项目不再使用测试、预发布或 staging 环境，不再使用 `test-stock.gc9527.com`、测试数据库或测试小程序凭证。
 
+## 当前功能（2026-10-25）
+
+- 账号密码登录、微信小程序扫码登录与绑定、个人资料和头像维护。
+- A 股、港股、美股交易记录、手续费偏好、出入金和结构化复盘。
+- 当前持仓、按清仓周期展开的历史持仓、证券搜索与行情。
+- 公司行动：现金分红、拆分/合并、送股/转增、配股，参与持仓、现金和历史收益重算。
+- 人民币资产汇总、收益曲线、上证指数基准、收益日历和估值质量标记。
+
+当前使用人民币汇总现金、当前汇率和摊薄成本；锁定汇率、分币种现金账户、标准加权成本和业务数据重置脚本尚未上线。历史补录和删除会校验完整时间序列，拒绝导致历史超卖的变更。
+
 ## 快速开始
+
+先安装 Node.js 20 并启动本机 MongoDB。前后端均依赖共享包，安装和部署时必须保留仓库目录结构，并先执行：
+
+```bash
+cd packages/stock-search
+npm ci
+```
 
 ### 后端
 
@@ -33,7 +51,7 @@
 cd apps/backend
 cp .env.production.example .env.development
 # 将 .env.development 中的 MONGODB_URI 改为本机 MongoDB 连接串
-npm install
+npm ci
 npm run dev
 ```
 
@@ -64,7 +82,7 @@ npm run test
 ## 阿里云部署要点
 
 1. 在阿里云服务器创建项目目录。
-2. 上传后端源码、`package.json`、`package-lock.json` 和安全配置的 `.env.production`。
+2. 保留后端与共享包的仓库相对目录，安装两者依赖，并安全配置 `.env.production`；目录不同的生产实例按共享包说明安装打包产物。
 3. `MONGODB_URI` 必须使用阿里云生产 MongoDB，不能使用 `localhost` 或任何测试库连接串。
 4. 前端生产构建产物和后端均部署到阿里云，由 Nginx 提供 H5 并反向代理 API。
 5. 使用 `./entrypoint.sh prod` 或 `NODE_ENV=production npm run start:prod` 启动后端并设置进程守护。
@@ -81,19 +99,24 @@ npm run test
 - [需求 PRD](docs/需求prd.md)
 - [开发工作指导](WORKFLOW.md)
 
-## 用户业务数据重置（高风险维护操作）
 
-> 此操作**不可恢复**。它只用于明确的维护窗口或新账户基线初始化；执行前必须确认目标环境、导出数据库备份，并获得业务负责人确认。默认不执行删除。
-
-重置会删除指定用户（或明确确认后的全部用户）的交易、持仓、转账、资产、收益快照与复盘派生数据；**不会删除账号、密码或已绑定的微信身份信息**。用户手续费偏好会恢复为默认值。全局市场行情与已撤销令牌不会被删除。
+## 验证与维护
 
 ```bash
 cd apps/backend
-# 仅重置一个已核对的用户：必须同时提供用户 ID 和确认参数
-npm run reset:user-business-data -- --userId <USER_ID> --confirm
-
-# 重置所有用户业务数据：仅限已备份、已审批的维护窗口
-npm run reset:all-business-data -- --confirm-all-users
+npm run lint
+npm test
+cd ../frontend
+npm test
+npm run build:h5
+cd ../miniapp
+node --test tests/*.test.js
 ```
 
-请勿在日常开发、未知数据库连接或生产高峰期执行上述命令；先在隔离测试数据库演练并核对命令输出的删除数量。
+后端测试使用独立的 MongoDB 内存实例；首次运行可能需要下载测试数据库程序。`apps/backend/tests/specifications` 是未上线功能的历史规格，不属于默认回归集。GitHub CI 目前仅支持手动触发。
+
+- [生产基线与发布记录](PRODUCTION_BASELINE.md)
+- [仓库清理与保留说明](docs/repository-maintenance.md)
+- [共享证券搜索包](packages/stock-search/README.md)
+
+当前仓库没有业务数据重置命令。维护数据库前需另行制定并审核迁移方案。

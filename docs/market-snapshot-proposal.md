@@ -1,5 +1,7 @@
 # A 股大盘数据风控与历史交易快照方案
 
+> 历史方案，保留用于追溯。2026-10-25 核对：当前已有 MarketDailySnapshot、marketSnapshotScheduler 和行情缓存/降级实现；下文的问题评估描述方案提出时的状态，不能用作当前性能结论。当前字段约定见 apidoc.md，实际调度见 apps/backend/src/jobs/marketSnapshotScheduler.js。
+
 ## 一、问题评估
 
 ### 1. 风控风险（高）
@@ -87,7 +89,7 @@ GET /api/market/overview?date=2026-06-27
 
 ### 2.3 前端按交易日期调用不同大盘接口
 
-修改 [`TradeModal.vue`](apps/frontend/src/components/TradeModal.vue)：
+修改 [`TradeModal.vue`](../apps/frontend/src/components/TradeModal.vue)：
 
 ```js
 watch(() => [formState.market, formState.date], ([newMarket, newDate]) => {

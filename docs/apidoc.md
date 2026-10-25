@@ -1,6 +1,6 @@
 # API 接口文档
 
-本文档汇总了当前系统对前端开放的所有 HTTP 接口。
+本文档按 2026-10-25 的代码实现核对。下述路径除明确写出 /api 外，均相对于基础路径 /api。
 
 **基础信息**
 
@@ -44,7 +44,7 @@
 
 | 前端环境 | 构建命令 | 后端 API 域名 |
 |----------|----------|---------------|
-| 开发/测试 | `npm run dev:h5` | `http://127.0.0.1:3000` (本地) |
+| 本地开发 | `npm run dev:h5` | `http://127.0.0.1:3000` (本地) |
 | 生产 | `npm run build:h5` | `实际部署的前端 HTTPS 域名` |
 
 ***
@@ -122,7 +122,7 @@
     - 若某日缺少对应的基准历史数据，`benchmark` 返回 `null`，不会静默回填成 `0`。
   - 顶层返回中的 `benchmarkName` / `benchmarkSymbol` 用于明确当前基准语义，避免前后端理解不一致。
   - 个人每日收益率入库：当日发生资产变动（新增/删除/修改交易、删除持仓、入金出金）或请求 `GET /assets/summary` 时，后端会 upsert 当天的 `DailyProfit` 记录：
-    - `DailyProfit` 同时保存当日收益率、当日盈亏额、外部资金流与估值质量；历史流水的 CNY 金额使用写入时锁定的汇率，不会以当前汇率重估
+    - `DailyProfit` 同时保存当日收益率、当日盈亏额、外部资金流与估值质量；当前使用人民币汇总现金和当前汇率，不提供锁定历史汇率或原币现金账户
     - 收益曲线请求时的 `benchmark` 按上证指数累计涨跌幅实时计算，基线为该账户收益曲线首个可用交易日
     - `DailyProfit.dailyProfitAmount` / `DailyProfit.cumulativeProfitAmount` 按当日/累计盈亏（CNY）写入
 - **后台定时快照建议**:
@@ -240,7 +240,7 @@
 
 **盈亏口径说明**
 
-- `realizedProfit`：该标的历史已实现盈亏（折算 CNY），按全量交易正序回放、使用移动均价计算。
+- `realizedProfit`：该标的历史已实现盈亏（折算 CNY），按交易与公司行动正序回放、使用当前摊薄成本实现计算。
 - `unrealizedProfit`：当前剩余持仓的未实现盈亏（折算 CNY）。
 - `cumulativeProfit`：`realizedProfit + unrealizedProfit`，用于“当前持仓累计盈亏”展示。
 - `profitRate`：累计盈亏率，`cumulativeProfit / totalInvestmentCNY`。
@@ -250,7 +250,7 @@
 ### 获取清仓汇总列表
 
 - **接口地址**: `GET /trades/history-holdings`
-- **说明**: 返回所有“已清仓(最终 quantity<=0)”标的的汇总列表，用于清仓列表页；点击某条再用 `GET /trades/reviews?symbol=...` 查看明细。
+- **说明**: 按证券的独立清仓周期返回历史持仓列表（同一证券可有多条 cycleId），用于清仓列表页；点击某条再用 `GET /trades/reviews?symbol=...` 查看明细。
 - **入参 (Query)**:
   | 参数名      | 类型     | 必填 | 说明 |
   | :--------- | :------ | :-- | :-- |
@@ -258,7 +258,7 @@
   | pageSize   | number  | 否  | 每页数量 (默认 20) |
   | sort       | string  | 否  | 排序字段，默认 `-lastTradeDate`；支持 `cumulativeProfit` / `profitRate` / `lastTradeDate` / `tradesCount`，加 `-` 表示倒序 |
 - **计算口径**:
-  - 按 `symbol` 分组，以交易日期正序回放，使用“移动均价”计算已实现盈亏。
+  - 按证券及清仓周期回放交易与公司行动，采用当前摊薄成本实现；返回 cycleId 用于匹配周期明细。
   - `cumulativeProfit` 为已实现盈亏（折算 CNY），`profitRate = cumulativeProfit / totalInvestment`，其中 `totalInvestment` 为累计买入成本（含手续费，折算 CNY）。
 - **出参**:
   ```json
@@ -657,16 +657,38 @@
 
 ***
 
-## 运维：用户业务数据重置（不对外开放 HTTP 接口）
+## 7. 其他已注册接口
 
-此功能是后端维护脚本，**不是 API 接口**，不应由前端调用。
+下表补充正文未展开的接口，均使用 /api 基础路径；除微信授权入口、回调和扫码登录会话外均需鉴权。请求结构以对应 controller 为准。
 
-- 单用户：`npm run reset:user-business-data -- --userId <USER_ID> --confirm`
-- 全用户：`npm run reset:all-business-data -- --confirm-all-users`
+| 方法 | 路径 | 用途 |
+|------|------|------|
+| POST | /auth/register | 注册 |
+| PUT | /auth/password | 修改密码 |
+| POST | /auth/logout | 退出并撤销令牌 |
+| POST | /auth/wechat/miniapp-login/create | 创建扫码登录会话 |
+| GET | /auth/wechat/miniapp-login/status | 查询扫码登录状态 |
+| POST | /auth/wechat/miniapp-login/confirm | 小程序确认登录 |
+| GET / PUT | /users/me | 读取和更新资料 |
+| POST | /users/avatar | 上传头像，multipart 字段 avatar |
+| PUT | /users/password | 修改密码 |
+| POST | /users/wechat/bind-url | 兼容网站微信绑定入口 |
+| GET | /users/wechat/callback | 微信回调 |
+| POST | /users/wechat/miniapp-bind-code | 创建绑定二维码 |
+| POST | /users/wechat/miniapp-bind | 小程序确认绑定 |
+| POST | /users/wechat/miniapp-current-binding | 小程序查询当前绑定 |
+| GET | /users/wechat/miniapp-bind-status | 查询绑定状态 |
+| DELETE | /users/wechat/bind | 解绑微信 |
+| GET | /trades/holdings/:symbol/trades | 当前持仓交易明细 |
+| GET | /trades/history-holdings/:symbol/groups | 单证券历史清仓周期 |
+| POST | /trades/history-holdings/groups/batch | 批量查询历史周期 |
+| GET | /trades/reviews/:id | 单笔交易复盘 |
+| GET / PUT | /trades/commission-preference | 手续费偏好 |
+| GET / POST | /company-actions | 公司事项列表（GET 必传 symbol）及新增 |
+| PUT / DELETE | /company-actions/:id | 编辑和删除公司事项 |
 
-### 安全约束
+CompanyAction 的类型为 DIVIDEND、SPLIT、MERGER、BONUS、RIGHTS、OTHER，必填 symbol、name、date、description；它与第 6 节 CorporateAction 的集合、枚举和计算职责不同，不能混用或作为重复接口删除。
 
-1. 操作不可恢复；执行前必须完成数据库备份、核对 `MONGODB_URI` 指向目标环境，并在维护窗口内执行。
-2. 缺少 `--confirm` 或 `--confirm-all-users` 时，脚本会在连接数据库前拒绝执行；不要将确认参数封装进自动化日常任务。
-3. 删除范围仅包括用户业务数据（交易、持仓、转账、资产、日收益/营收、月统计、快照及临时微信会话）。账号密码、微信绑定身份、全局行情数据与已撤销令牌不会被删除。
-4. 重置后手续费偏好恢复为默认值；脚本会输出各集合删除数量、重置用户数量与执行时间，必须人工复核输出。
+收益曲线点还返回 valuationQuality；收益日历还返回 dailyReturns 与 valuationQualityByDate。客户端应展示实际质量，不将缺失行情当作完整估值。
+
+历史交易或公司行动变更若导致历史超卖，会返回 400；公司行动同日重复返回 409。业务数据重置脚本尚未上线，仓库没有对应 npm 命令。

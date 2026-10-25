@@ -5,23 +5,18 @@
 ## 构建与本地验证
 
 ```bash
-cd apps/frontend
+cd packages/stock-search
+npm ci
+cd ../../apps/frontend
+npm ci
 cp .env.production.example .env.production
-# Confirm `.env.production` uses the production API `https://stock.gc9527.com`. Local development uses `.env.development`; there is no staging build.
-rm -rf dist
+# 确认生产 API 为 https://stock.gc9527.com，本地开发使用 .env.development
 npm run build:h5
 ```
 
 产物目录：`dist/build/h5`。
 
-如使用项目内 Dockerfile：
-
-```bash
-docker build -t stock-review-frontend:latest .
-docker run --rm -p 8080:80 stock-review-frontend:latest
-```
-
-浏览器访问 `http://localhost:8080` 验证。
+当前推荐以完整仓库构建，再发布静态产物。现有 Dockerfile 以 apps/frontend 为上下文，无法包含 ../../packages/stock-search 链接依赖，尚不能直接按单目录 docker build 发布。调整容器上下文和共享包安装前，请使用上面的源码构建流程。
 
 ## 阿里云 ECS + Nginx
 
@@ -33,6 +28,6 @@ docker run --rm -p 8080:80 stock-review-frontend:latest
 
 ## 容器部署
 
-构建镜像并推送到阿里云容器镜像仓库后，在 ECS、ACK 或其他容器运行环境部署，暴露容器端口 `80`，并由 Nginx/负载均衡绑定域名和 HTTPS。
+如需容器部署，先修正并验证上述共享包构建上下文，再构建镜像并推送到阿里云容器镜像仓库，之后，在 ECS、ACK 或其他容器运行环境部署，暴露容器端口 `80`，并由 Nginx/负载均衡绑定域名和 HTTPS。
 
 不要在前端源码中写入后端密钥、微信 AppSecret 或数据库密码；运行时 API 地址按现有环境配置注入。
