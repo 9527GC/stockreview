@@ -33,16 +33,7 @@ const toCompanyActionOperation = (action) => ({
   price: null,
   quantity: Number(action.quantityChange) || 0,
   commission: 0,
-  logic: action.description,
-  beforeQuantity: action.beforeQuantity,
-  afterQuantity: action.afterQuantity,
-  bonusQuantity: action.bonusQuantity,
-  rightsQuantity: action.rightsQuantity,
-  subscribedQuantity: action.subscribedQuantity,
-  cashPerShare: action.cashPerShare,
-  subscriptionPrice: action.subscriptionPrice,
-  ratioNumerator: action.ratioNumerator,
-  ratioDenominator: action.ratioDenominator
+  logic: action.description
 });
 
 const getImpactingActions = ({ trades, actions }) => (

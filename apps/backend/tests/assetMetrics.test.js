@@ -55,10 +55,23 @@ beforeEach(async () => {
 });
 
 describe('asset metric endpoints', () => {
-  test('空账户汇总也返回统一估值质量和分币种现金', async () => {
+  test('全部范围首日资产为零时仍返回个人曲线，后续入金不制造收益', async () => {
+    await DailyProfit.insertMany([
+      { userId, date: '2024-12-08', dailyReturn: 0, totalAssets: 0 },
+      { userId, date: '2024-12-09', dailyReturn: 0, totalAssets: 10000 },
+      { userId, date: '2024-12-10', dailyReturn: -10, totalAssets: 9000 },
+      { userId, date: '2024-12-11', dailyReturn: 0, totalAssets: 19000 },
+      { userId, date: '2024-12-12', dailyReturn: 10, totalAssets: 20900 }
+    ]);
+    const res = await request(app).get('/api/assets/profit-curve?range=all')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.data.map(point => point.value)).toEqual([0, 0, -10, -10, -1]);
+  });
+  test('空账户汇总返回零资产、现金与当日盈亏', async () => {
     const res = await request(app).get('/api/assets/summary').set('Authorization', `Bearer ${token}`);
     expect(res.statusCode).toBe(200);
-    expect(res.body).toMatchObject({ valuationQuality: 'complete', cashByCurrency: { CNY: 0, HKD: 0, USD: 0 }, totalDailyProfit: 0 });
+    expect(res.body).toMatchObject({ totalAssets: 0, cash: 0, totalDailyProfit: 0 });
   });
 
   test('汇总今日盈亏读取刚生成的 DailyProfit 快照，而非旧的持仓日盈亏计算', async () => {

@@ -119,7 +119,7 @@ export const useTradeStore = defineStore('trade', () => {
 
   const refreshAfterTradeMutation = async (overrides = {}) => {
     const params = { page: 1, pageSize: 100, include: 'marketOverview', ...lastTradeReviewsParams.value, ...overrides };
-    if (params.symbol) params.symbol = normalizeSymbol(params.symbol);
+    if (params.symbol) params.symbol = String(params.symbol).trim();
 
     const [assetsRes, holdingsRes, tradesRes] = await Promise.all([
       getAssetsSummary().catch(() => null),
@@ -299,6 +299,25 @@ export const useTradeStore = defineStore('trade', () => {
     });
   });
 
+  // 搜索只刷新日志，避免每次输入都重算资产、持仓和历史分组。
+  let reviewsRequestId = 0;
+  const loadReviews = async (params = {}) => {
+    const requestId = ++reviewsRequestId;
+    const query = { page: 1, pageSize: 100, include: 'marketOverview', ...params };
+    if (query.symbol) query.symbol = String(query.symbol).trim();
+    lastTradeReviewsParams.value = { ...query };
+    loading.value = true;
+    try {
+      const response = await getTradeReviews(query);
+      if (requestId !== reviewsRequestId) return;
+      setTradesFromResponse(response, { current: query.page, pageSize: query.pageSize });
+    } catch (error) {
+      if (requestId === reviewsRequestId) console.error('Failed to load reviews', error);
+    } finally {
+      if (requestId === reviewsRequestId) loading.value = false;
+    }
+  };
+
   // Load trades from storage and API
   const loadTrades = async (params = {}) => {
     loading.value = true;
@@ -307,7 +326,7 @@ export const useTradeStore = defineStore('trade', () => {
       assetsSummary.value = null;
 
       const normalizedParams = { page: 1, pageSize: 100, include: 'marketOverview', ...params };
-      if (normalizedParams.symbol) normalizedParams.symbol = normalizeSymbol(normalizedParams.symbol);
+      if (normalizedParams.symbol) normalizedParams.symbol = String(normalizedParams.symbol).trim();
       lastTradeReviewsParams.value = { ...normalizedParams };
 
       // 1. Fetch from API
@@ -850,6 +869,7 @@ export const useTradeStore = defineStore('trade', () => {
     transferRecordsRequestFailed,
     tradeReviewsPagination,
     loadTrades,
+    loadReviews,
     saveTrades,
     addTrade,
     updateTrade,

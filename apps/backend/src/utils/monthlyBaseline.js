@@ -1,6 +1,5 @@
 const Transfer = require('../models/Transfer');
 const { Trade } = require('../models/Trade');
-const { CorporateAction } = require('../models/CorporateAction');
 const DailyProfit = require('../models/DailyProfit');
 const { getRates } = require('./currency');
 const { calculateCashAndPrincipalCNY } = require('./ledger');
@@ -16,15 +15,14 @@ const { parseDateInOffset } = require('./datetime');
 const getMonthStartBaseline = async (userId, startStr, offsetMinutes = 480) => {
   const monthStartDate = parseDateInOffset(`${startStr} 00:00:00`, offsetMinutes);
 
-  const [rates, transfers, trades, actions, previousDailyProfit] = await Promise.all([
+  const [rates, transfers, trades, previousDailyProfit] = await Promise.all([
     getRates(),
     Transfer.find({ userId, date: { $lt: monthStartDate } }),
     Trade.find({ userId, date: { $lt: monthStartDate } }).sort({ date: 1, _id: 1 }),
-    CorporateAction.find({ userId, date: { $lt: monthStartDate } }).sort({ date: 1, _id: 1 }),
     DailyProfit.findOne({ userId, date: { $lt: startStr } }).sort({ date: -1 })
   ]);
 
-  const { principalCNY } = calculateCashAndPrincipalCNY({ transfers, trades, actions, rates });
+  const { principalCNY } = calculateCashAndPrincipalCNY({ transfers, trades, rates });
   const monthStartPrincipal = round2(principalCNY);
 
   let monthStartAssets = null;

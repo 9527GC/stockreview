@@ -1,18 +1,22 @@
+const { matchesStock } = require('@stock-review/stock-search');
+const { compareTradeSettlement } = require('../utils/tradeSettlementOrder');
 const mongoose = require('mongoose');
 const { Trade, Holding } = require('../models/Trade');
 const CompanyAction = require('../models/CompanyAction');
 const { CorporateAction } = require('../models/CorporateAction');
+const { getCurrencyForMarket } = require('../utils/marketCurrency');
+const { portfolioEvents } = require('../utils/portfolioEvents');
+const { applyCorporateActions } = require('../utils/corporateActions');
 const { Asset } = require('../models/Asset');
 const User = require('../models/User');
+const Transfer = require('../models/Transfer');
 const { getRates } = require('../utils/currency');
 const { getQuotes, buildTradeMarketSnapshot, normalizeMarketOverviewSnapshot, inferSnapshotStatus } = require('../utils/marketData');
-const { refreshAssetMarketValue } = require('../utils/assetSnapshot');
-const { BEIJING_OFFSET_MINUTES, getDayRangeInOffset, parseDateInOffset } = require('../utils/datetime');
-const { toMoney } = require('../utils/money');
-const { getCurrencyForMarket } = require('../utils/marketCurrency');
+const { getDayRangeInOffset, parseDateInOffset } = require('../utils/datetime');
+const { calculateCashAndPrincipalCNY } = require('../utils/ledger');
 const { round2, calculateDailyProfitFromPosition } = require('../utils/pnl');
 const { normalizeSymbol, buildSymbolAliases } = require('../utils/symbol');
-const { calculateWeightedAveragePerformance, calculateClosedPositionCycles, calculateDilutedPerformance, calculateDilutedProfits, calculatePositionZeroGroups } = require('../utils/cost');
+const { calculateDilutedPerformance, calculateDilutedProfits, calculatePositionZeroGroups } = require('../utils/cost');
 const { compareByDateAndId, getImpactingActions, addActionsToHoldingGroups } = require('../utils/companyActions');
 const { upsertTodayDailyProfit } = require('../utils/dailyProfitBackfill');
 const { sanitizeHtml } = require('../utils/sanitizeHtml');
@@ -54,14 +58,10 @@ const inferExchangeFromSymbol = (symbol) => {
   return 'SH';
 };
 
-const inferCurrencyFromSymbol = (symbol, market, fallbackCurrency) => {
-  const sym = String(symbol || '').toUpperCase();
-  const mkt = String(market || '').toUpperCase();
-  if (fallbackCurrency && fallbackCurrency !== 'CNY') return fallbackCurrency;
-  if (sym.endsWith('.HK') || mkt === 'HK') return 'HKD';
-  if (sym.endsWith('.US') || mkt === 'US') return 'USD';
-  if (sym.endsWith('.SH') || sym.endsWith('.SZ') || mkt === 'SH' || mkt === 'SZ' || mkt === 'CN') return 'CNY';
-  return fallbackCurrency || 'CNY';
+const inferCurrencyFromSymbol = (symbol, market, currency) => {
+  const expected = getCurrencyForMarket({ symbol, market });
+  if (currency && currency !== expected) throw new RangeError('Trade currency conflicts with symbol currency ' + expected);
+  return expected;
 };
 
 /**
@@ -92,60 +92,33 @@ const calculateCommission = ({ price, quantity, feeMode, feeRate, feeAmount, com
  * 校验编辑某条交易的数量后，全账本是否会出现超卖
  * @returns {Promise<{valid: boolean, message?: string}>}
  */
-const validateLedgerTrades = (trades, actions = []) => {
-  const holdings = new Map();
-  const ordered = [...trades, ...actions.map(a => ({ ...a, isCorporateAction: true }))].sort((a, b) => {
-    const byDate = new Date(a.date) - new Date(b.date);
-    return byDate || Number(b.isCorporateAction || false) - Number(a.isCorporateAction || false) || String(a._id || '').localeCompare(String(b._id || ''));
-  });
-
-  for (const trade of ordered) {
-    const symbol = normalizeSymbol(trade.symbol);
-    if (trade.isCorporateAction) {
-      const quantity = holdings.get(symbol) || 0;
-      if (quantity > 0 && ['SPLIT', 'REVERSE_SPLIT'].includes(trade.type)) holdings.set(symbol, quantity * trade.ratioNumerator / trade.ratioDenominator);
-      if (quantity > 0 && ['STOCK_DIVIDEND', 'BONUS_ISSUE', 'RIGHTS_ISSUE'].includes(trade.type)) holdings.set(symbol, quantity + (Number(trade.quantityChange) || 0));
-      continue;
-    }
-    const quantity = Number(trade.quantity);
-    if (!Number.isFinite(quantity) || quantity <= 0) return { valid: false, message: messages.QUANTITY_MUST_BE_POSITIVE };
-    if (trade.type === 'BUY') {
-      holdings.set(symbol, (holdings.get(symbol) || 0) + quantity);
-      continue;
-    }
-    if (trade.type !== 'SELL') continue;
-    const current = holdings.get(symbol) || 0;
-    if (quantity > current) {
-      return { valid: false, message: messages.QUANTITY_EXCEEDS_HOLDING_AT_DATE(trade.name, symbol, new Date(trade.date).toISOString(), current) };
-    }
-    holdings.set(symbol, current - quantity);
-  }
-  return { valid: true };
-};
-
-const validateCandidateLedger = async ({ userId, candidateTrade, excludedTradeId }) => {
-  const [trades, actions] = await Promise.all([Trade.find({ userId }).lean(), CorporateAction.find({ userId }).lean()]);
-  const candidateTrades = trades.filter((trade) => String(trade._id) !== String(excludedTradeId));
-  if (candidateTrade) candidateTrades.push(candidateTrade.toObject ? candidateTrade.toObject() : candidateTrade);
-  return validateLedgerTrades(candidateTrades, actions);
-};
-
 const validateTradeEditQuantity = async ({ userId, editedTradeId, updates }) => {
-  if (updates.quantity === undefined) return { valid: true };
-  const trade = await Trade.findOne({ _id: editedTradeId, userId }).lean();
-  if (!trade) return { valid: false, message: messages.TRADE_NOT_FOUND };
-  return validateCandidateLedger({ userId, excludedTradeId: editedTradeId, candidateTrade: { ...trade, ...updates } });
+  const [trades, actions] = await Promise.all([
+    Trade.find({ userId }).lean(), CorporateAction.find({ userId, date: { $lte: new Date() } }).lean()
+  ]);
+  const candidate = trades.filter(t => !updates.remove || String(t._id) !== String(editedTradeId))
+    .map(t => String(t._id) === String(editedTradeId) ? { ...t, ...updates } : t);
+  if (updates.append) candidate.push(updates.append);
+  try {
+    calculateDilutedPerformance({ trades: candidate, actions, strict: true });
+    return { valid: true };
+  } catch (error) { return { valid: false, message: error.message }; }
 };
 
 const rebuildAssetFromLedger = async (userId) => {
-  const [tradesAsc, actionsAsc, existingHoldings] = await Promise.all([
-    Trade.find({ userId }).sort({ date: 1, _id: 1 }),
-    CorporateAction.find({ userId }).sort({ date: 1, _id: 1 }),
-    Holding.find({ userId })
+  const [rates, transfers, tradesAsc, existingHoldings, actions] = await Promise.all([
+    getRates(),
+    Transfer.find({ userId }),
+    Trade.find({ userId }).sort({ date: 1, settlementOrder: 1, _id: 1 }),
+    Holding.find({ userId }),
+    CorporateAction.find({ userId, date: { $lte: new Date() } }).lean()
   ]);
 
+  const { cashCNY, principalCNY } = calculateCashAndPrincipalCNY({ transfers, trades: tradesAsc, rates, actions });
+
   const existingBySymbol = new Map(existingHoldings.map(h => [normalizeSymbol(h.symbol), h]));
-  const performanceBySymbol = calculateWeightedAveragePerformance({ trades: tradesAsc, actions: actionsAsc, rates: await getRates() });
+  const performanceBySymbol = calculateDilutedPerformance({ trades: tradesAsc, rates, actions });
+
   const targetBySymbol = new Map();
   performanceBySymbol.forEach((perf) => {
     if (perf.quantity <= 0) return;
@@ -158,49 +131,102 @@ const rebuildAssetFromLedger = async (userId) => {
       avgCost: round2(perf.avgCost),
       lastPrice: old?.lastPrice ?? null,
       lastPriceAt: old?.lastPriceAt ?? null,
-      lastPriceDate: old?.lastPriceDate ?? null,
       currency: perf.currency || old?.currency || 'CNY',
       marketTag: old?.marketTag || null
     });
   });
 
+  // 增量更新：存在的 update，新增的 insert，清仓的 delete
   const bulkOps = [];
   existingBySymbol.forEach((old, symbol) => {
-    if (!targetBySymbol.has(symbol)) bulkOps.push({ deleteOne: { filter: { _id: old._id } } });
+    if (!targetBySymbol.has(symbol)) {
+      bulkOps.push({ deleteOne: { filter: { _id: old._id } } });
+    }
   });
   targetBySymbol.forEach((target, symbol) => {
     const old = existingBySymbol.get(symbol);
-    if (!old) {
+    if (old) {
+      const changed =
+        old.quantity !== target.quantity ||
+        old.avgCost !== target.avgCost ||
+        old.currency !== target.currency ||
+        old.name !== target.name ||
+        old.marketTag !== target.marketTag;
+      if (changed) {
+        bulkOps.push({
+          updateOne: {
+            filter: { _id: old._id },
+            update: {
+              $set: {
+                quantity: target.quantity,
+                avgCost: target.avgCost,
+                currency: target.currency,
+                name: target.name,
+                marketTag: target.marketTag
+              }
+            }
+          }
+        });
+      }
+    } else {
       bulkOps.push({ insertOne: { document: target } });
-      return;
-    }
-    const changed = old.quantity !== target.quantity
-      || old.avgCost !== target.avgCost
-      || old.currency !== target.currency
-      || old.name !== target.name
-      || old.marketTag !== target.marketTag;
-    if (changed) {
-      bulkOps.push({
-        updateOne: {
-          filter: { _id: old._id },
-          update: { $set: {
-            quantity: target.quantity,
-            avgCost: target.avgCost,
-            currency: target.currency,
-            name: target.name,
-            marketTag: target.marketTag
-          } }
-        }
-      });
     }
   });
 
-  if (bulkOps.length > 0) await Holding.bulkWrite(bulkOps, { ordered: false });
+  if (bulkOps.length > 0) {
+    await Holding.bulkWrite(bulkOps, { ordered: false });
+  }
 
-  // All asset values and cached close prices are written through the sole valuation entry point.
-  await refreshAssetMarketValue(userId);
+  const holdings = await Holding.find({ userId });
+
+  const symbols = holdings.map(h => h.symbol);
+  const quotes = await getQuotes(symbols);
+
+  const priceUpdates = [];
+  let holdingsMarketValue = 0;
+  holdings.forEach(h => {
+    let currentPrice = null;
+    const quote = quotes[h.symbol] || Object.values(quotes).find(q => q.symbol === h.symbol);
+
+    const closePrice = quote?.preClose && quote.preClose > 0 ? quote.preClose : null;
+    if (closePrice !== null && h.lastPrice !== closePrice) {
+      priceUpdates.push({
+        updateOne: {
+          filter: { _id: h._id },
+          update: { $set: { lastPrice: closePrice, lastPriceAt: new Date() } }
+        }
+      });
+    }
+
+    if (quote && quote.price > 0) {
+      currentPrice = quote.price;
+    } else if (h.lastPrice && h.lastPrice > 0) {
+      currentPrice = h.lastPrice;
+    }
+
+    const marketValue = currentPrice !== null ? h.quantity * currentPrice : 0;
+    const rate = rates[h.currency] || 1;
+    holdingsMarketValue += marketValue * rate;
+  });
+
+  if (priceUpdates.length > 0) {
+    await Holding.bulkWrite(priceUpdates, { ordered: false });
+  }
+
+  let asset = await Asset.findOne({ userId });
+  if (!asset) asset = new Asset({ userId });
+
+  asset.cash = cashCNY;
+  asset.currentPrincipal = principalCNY;
+  asset.holdingsMarketValue = round2(holdingsMarketValue);
+  asset.totalAssets = round2(asset.cash + asset.holdingsMarketValue);
+  asset.totalHoldingsCount = holdings.length;
+  await asset.save();
 };
-const buildTradePerformanceBySymbol = ({ trades, actions = [], rates }) => calculateWeightedAveragePerformance({ trades, actions, rates });
+
+const buildTradePerformanceBySymbol = ({ trades, rates, actions = [] }) => {
+  return calculateDilutedPerformance({ trades, rates, actions });
+};
 
 const getTradeSnapshotView = (trade) => {
   const snapshot = normalizeMarketOverviewSnapshot(trade?.marketOverviewSnapshot || trade?.marketOverview);
@@ -223,16 +249,15 @@ const getTradeSnapshotView = (trade) => {
 exports.getHoldings = async (req, res) => {
   try {
     const userId = req.user._id;
-    const [holdings, asset, RATES, tradesAsc, actionsAsc] = await Promise.all([
+    const [holdings, asset, RATES, tradesAsc, actions] = await Promise.all([
       Holding.find({ userId }),
       Asset.findOne({ userId }),
       getRates(),
-      Trade.find({ userId }).sort({ date: 1, _id: 1 }),
-      CorporateAction.find({ userId }).sort({ date: 1, _id: 1 })
+      Trade.find({ userId }).sort({ date: 1, settlementOrder: 1, _id: 1 }),
+      CorporateAction.find({ userId, date: { $lte: new Date() } }).lean()
     ]);
     const cashCNY = asset?.cash || 0;
-    const performanceBySymbol = buildTradePerformanceBySymbol({ trades: tradesAsc, actions: actionsAsc, rates: RATES });
-    const dilutedPerformanceBySymbol = calculateDilutedPerformance({ trades: tradesAsc, actions: actionsAsc, rates: RATES });
+    const performanceBySymbol = buildTradePerformanceBySymbol({ trades: tradesAsc, rates: RATES, actions });
 
     // 计算每只股票最近一次交易时间，用于前端默认排序
     const lastTradeDateBySymbol = new Map();
@@ -273,6 +298,7 @@ exports.getHoldings = async (req, res) => {
       });
     });
 
+    const priceUpdates = [];
 
     const items = holdings.map(h => {
       let currentPrice;
@@ -281,6 +307,15 @@ exports.getHoldings = async (req, res) => {
       let dailyProfit = null;
 
       const quote = quoteMap.get(h.symbol);
+      const closePrice = quote?.preClose && quote.preClose > 0 ? quote.preClose : null;
+      if (closePrice !== null && h.lastPrice !== closePrice) {
+        priceUpdates.push({
+          updateOne: {
+            filter: { _id: h._id },
+            update: { $set: { lastPrice: closePrice, lastPriceAt: new Date() } }
+          }
+        });
+      }
 
       if (quote && quote.price > 0) {
         currentPrice = quote.price;
@@ -296,7 +331,7 @@ exports.getHoldings = async (req, res) => {
           });
         }
       } else {
-        currentPrice = h.lastPrice && h.lastPrice > 0 ? h.lastPrice : null;
+        currentPrice = closePrice !== null ? closePrice : (h.lastPrice && h.lastPrice > 0 ? h.lastPrice : null);
       }
 
       if (currentPrice !== null && h.avgCost > 0) {
@@ -307,14 +342,17 @@ exports.getHoldings = async (req, res) => {
       const rate = RATES[h.currency] || 1;
       const marketValueCNY = marketValue !== null ? marketValue * rate : null;
       const perf = performanceBySymbol.get(normalizeSymbol(h.symbol));
-      const diluted = dilutedPerformanceBySymbol.get(normalizeSymbol(h.symbol));
-      const { unrealizedProfit } = calculateDilutedProfits({ currentPrice, quantity: h.quantity, avgCost: h.avgCost, rate });
-      const realizedProfit = perf?.realizedProfitCNY || 0;
-      const cumulativeProfit = round2(realizedProfit + unrealizedProfit);
-      const dilutedUnrealizedProfit = diluted
-        ? calculateDilutedProfits({ currentPrice, quantity: h.quantity, avgCost: diluted.dilutedAvgCost, rate }).unrealizedProfit
-        : null;
-      const totalInvestmentCNY = perf?.totalBuyCostCNY || 0;
+      const {
+        unrealizedProfit,
+        cumulativeProfit,
+        realizedProfit
+      } = calculateDilutedProfits({
+        currentPrice,
+        quantity: h.quantity,
+        avgCost: h.avgCost,
+        rate
+      });
+      const totalInvestmentCNY = (perf?.totalBuyCost || 0) * rate;
       profitRate = cumulativeProfit !== null
         ? parseFloat((totalInvestmentCNY > 0 ? (cumulativeProfit / totalInvestmentCNY) : 0).toFixed(4))
         : null;
@@ -324,8 +362,6 @@ exports.getHoldings = async (req, res) => {
         name: h.name,
         quantity: h.quantity,
         avgCost: h.avgCost,
-        dilutedAvgCost: diluted?.dilutedAvgCost ?? null,
-        dilutedUnrealizedProfit,
         currentPrice,
         marketValue,
         marketValueCNY,
@@ -341,6 +377,9 @@ exports.getHoldings = async (req, res) => {
       };
     });
 
+    if (priceUpdates.length > 0) {
+      await Holding.bulkWrite(priceUpdates, { ordered: false });
+    }
 
     const holdingsMarketValueCNY = items.reduce((sum, it) => sum + (it.marketValueCNY || 0), 0);
     const totalAssetsCNY = cashCNY + holdingsMarketValueCNY;
@@ -391,9 +430,10 @@ exports.getCurrentHoldingTrades = async (req, res) => {
       userId: String(userId)
     });
 
-    const [trades, companyActions] = await Promise.all([
-      Trade.find({ userId, symbol: { $in: symbolSet } }).sort({ date: 1, _id: 1 }).lean(),
-      CompanyAction.find({ userId, symbol: { $in: symbolSet } }).sort({ date: 1, _id: 1 }).lean()
+    const [trades, companyActions, corporateActions] = await Promise.all([
+      Trade.find({ userId, symbol: { $in: symbolSet } }).sort({ date: 1, settlementOrder: 1, _id: 1 }).lean(),
+      CompanyAction.find({ userId, symbol: { $in: symbolSet } }).sort({ date: 1, settlementOrder: 1, _id: 1 }).lean(),
+      CorporateAction.find({ userId, symbol: { $in: symbolSet }, date: { $lte: new Date() } }).lean()
     ]);
 
     console.log('[getCurrentHoldingTrades] matched trades count:', trades.length);
@@ -401,31 +441,20 @@ exports.getCurrentHoldingTrades = async (req, res) => {
     let runningQty = 0;
     let currentBatchStartIndex = -1;
 
-    const sortedTrades = [...trades].sort((a, b) => {
-      const d = new Date(a.date) - new Date(b.date);
-      if (d !== 0) return d;
-      return String(a._id).localeCompare(String(b._id));
-    });
+    const sortedTrades = [...trades].sort(compareTradeSettlement);
 
-    for (let i = 0; i < sortedTrades.length; i++) {
-      const t = sortedTrades[i];
-      const qty = Number(t.quantity) || 0;
-
-      if (t.type === 'BUY') {
-        runningQty += qty;
-      } else if (t.type === 'SELL') {
-        runningQty -= qty;
+    for (const { record: t, kind } of portfolioEvents(sortedTrades, corporateActions)) {
+      if (kind === 'action') {
+        const holding = { quantity: runningQty, avgCost: 0 };
+        applyCorporateActions(new Map([[normalizedSymbol, holding]]), [t]);
+        runningQty = holding.quantity;
+        continue;
       }
-
-      if (runningQty < 0) {
-        runningQty = 0;
-      }
-
-      if (runningQty === 0) {
-        currentBatchStartIndex = -1;
-      } else if (currentBatchStartIndex === -1) {
-        currentBatchStartIndex = i;
-      }
+      const i = sortedTrades.indexOf(t);
+      runningQty += (Number(t.quantity) || 0) * (t.type === 'BUY' ? 1 : -1);
+      runningQty = Math.max(0, runningQty);
+      if (runningQty === 0) currentBatchStartIndex = -1;
+      else if (currentBatchStartIndex === -1) currentBatchStartIndex = i;
     }
 
     const currentBatchTrades = currentBatchStartIndex === -1 ? [] : sortedTrades.slice(currentBatchStartIndex);
@@ -480,7 +509,10 @@ exports.getReviews = async (req, res) => {
     const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize) || 20));
     const { symbol, sort, date, startDate, endDate, include, type, reviewStatus } = req.query;
     const query = { userId: req.user._id };
-    if (symbol) query.symbol = symbol;
+    if (symbol) {
+      const candidates = await Trade.find({ userId: req.user._id }).select('symbol name').lean();
+      query.symbol = { $in: [...new Set(candidates.filter(item => matchesStock(item, symbol)).map(item => item.symbol))] };
+    }
     if (type) query.type = String(type).trim().toUpperCase();
 
     const normalizedReviewStatus = String(reviewStatus || '').trim().toLowerCase();
@@ -614,57 +646,75 @@ exports.getReviewById = async (req, res) => {
 exports.getHistoryHoldings = async (req, res) => {
   try {
     const userId = req.user._id;
-    const { page = 1, pageSize = 20, sort = '-lastTradeDate' } = req.query;
+    const { page = 1, pageSize = 20, sort = '-lastTradeDate', keyword = '' } = req.query;
 
-    const [rates, trades, actions] = await Promise.all([
+    const [rates, trades] = await Promise.all([
       getRates(),
-      Trade.find({ userId }).sort({ date: 1, _id: 1 }),
-      CorporateAction.find({ userId }).sort({ date: 1, _id: 1 })
+      Trade.find({ userId }).sort({ date: 1, settlementOrder: 1, _id: 1 })
     ]);
 
-    const closed = calculateClosedPositionCycles({ trades, actions, rates });
+    const bySymbol = new Map();
+    for (const trade of trades) {
+      const symbol = normalizeSymbol(trade.symbol);
+      if (!bySymbol.has(symbol)) bySymbol.set(symbol, []);
+      bySymbol.get(symbol).push(trade);
+    }
+    const actions = await CorporateAction.find({ userId, date: { $lte: new Date() } }).lean();
+    const closed = [...bySymbol].flatMap(([symbol, records]) => calculatePositionZeroGroups({
+      trades: records, rates, actions: actions.filter(action => normalizeSymbol(action.symbol) === symbol)
+    }).map(group => ({ symbol, name: records[0].name, cycleId: group.groupId,
+      realizedProfitCNY: group.realizedProfit, closedTotalBuyCost: group.totalBuyCost,
+      currency: 'CNY', lastTradeDate: group.endDate, tradesCount: group.tradesCount })));
 
     const sortStr = String(sort || '-lastTradeDate');
     const desc = sortStr.startsWith('-');
     const key = desc ? sortStr.slice(1) : sortStr;
     const getKey = (x) => {
-      if (key === 'cumulativeProfit') return x.realizedProfit;
-      if (key === 'profitRate') return x.profitRate;
+      const rate = rates[x.currency] || 1;
+      const totalBuyCost = x.closedTotalBuyCost || x.totalBuyCost || 0;
+      const totalBuyCostCNY = totalBuyCost * rate;
+      if (key === 'cumulativeProfit') return x.realizedProfitCNY;
+      if (key === 'profitRate') {
+        return totalBuyCostCNY > 0 ? x.realizedProfitCNY / totalBuyCostCNY : 0;
+      }
       if (key === 'tradesCount') return x.tradesCount;
-      if (key === 'lastTradeDate') return x.closedAt ? new Date(x.closedAt).getTime() : 0;
-      return x.closedAt ? new Date(x.closedAt).getTime() : 0;
+      if (key === 'lastTradeDate') return x.lastTradeDate ? new Date(x.lastTradeDate).getTime() : 0;
+      return x.lastTradeDate ? new Date(x.lastTradeDate).getTime() : 0;
     };
 
-    closed.sort((a, b) => {
+    const search = String(keyword || '').trim().toLowerCase();
+    const matched = closed.filter(item => matchesStock(item, search));
+    matched.sort((a, b) => {
       const av = getKey(a);
       const bv = getKey(b);
       if (av === bv) {
-        const ad = a.closedAt ? new Date(a.closedAt).getTime() : 0;
-        const bd = b.closedAt ? new Date(b.closedAt).getTime() : 0;
-        if (ad === bd) return a.cycleId.localeCompare(b.cycleId);
-        return desc ? (bd - ad) : (ad - bd);
+        const ad = a.lastTradeDate ? new Date(a.lastTradeDate).getTime() : 0;
+        const bd = b.lastTradeDate ? new Date(b.lastTradeDate).getTime() : 0;
+        if (ad === bd) return a.symbol.localeCompare(b.symbol);
+        return bd - ad;
       }
       return desc ? (bv - av) : (av - bv);
     });
 
-    const total = closed.length;
+    const total = matched.length;
     const p = Math.max(1, parseInt(page));
     const ps = Math.max(1, parseInt(pageSize));
-    const slice = closed.slice((p - 1) * ps, (p - 1) * ps + ps);
+    const slice = matched.slice((p - 1) * ps, (p - 1) * ps + ps);
 
     res.json({
       list: slice.map(x => {
+        const rate = rates[x.currency] || 1;
+        const totalBuyCost = x.closedTotalBuyCost || x.totalBuyCost || 0;
+        const totalBuyCostCNY = totalBuyCost * rate;
+        const profitRate = totalBuyCostCNY > 0 ? x.realizedProfitCNY / totalBuyCostCNY : 0;
         return {
           cycleId: x.cycleId,
           symbol: x.symbol,
           name: x.name,
-          cumulativeProfit: round2(x.realizedProfit),
-          profitRate: x.profitRate,
-          lastTradeDate: x.closedAt,
-          openedAt: x.openedAt,
-          closedAt: x.closedAt,
-          tradesCount: x.tradesCount,
-          currency: x.currency
+          cumulativeProfit: round2(x.realizedProfitCNY),
+          profitRate: parseFloat(profitRate.toFixed(4)),
+          lastTradeDate: x.lastTradeDate,
+          tradesCount: x.tradesCount
         };
       }),
       total
@@ -687,14 +737,15 @@ exports.getHistoryHoldingGroups = async (req, res) => {
     const aliases = buildSymbolAliases(normalizedSymbol);
     const symbolSet = Array.from(new Set([normalizedSymbol, ...aliases]));
 
-    const [rates, trades, actions] = await Promise.all([
+    const [rates, trades, actions, corporateActions] = await Promise.all([
       getRates(),
-      Trade.find({ userId, symbol: { $in: symbolSet } }).sort({ date: 1, _id: 1 }).lean(),
-      CompanyAction.find({ userId, symbol: { $in: symbolSet } }).sort({ date: 1, _id: 1 }).lean()
+      Trade.find({ userId, symbol: { $in: symbolSet } }).sort({ date: 1, settlementOrder: 1, _id: 1 }).lean(),
+      CompanyAction.find({ userId, symbol: { $in: symbolSet } }).sort({ date: 1, settlementOrder: 1, _id: 1 }).lean(),
+      CorporateAction.find({ userId, symbol: { $in: symbolSet }, date: { $lte: new Date() } }).lean()
     ]);
 
     const groups = addActionsToHoldingGroups({
-      groups: calculatePositionZeroGroups({ trades, rates }),
+      groups: calculatePositionZeroGroups({ trades, rates, actions: corporateActions }),
       trades,
       actions
     });
@@ -730,8 +781,8 @@ exports.batchGetHistoryHoldingGroups = async (req, res) => {
 
     const [rates, trades, actions] = await Promise.all([
       getRates(),
-      Trade.find({ userId, symbol: { $in: allSymbols } }).sort({ date: 1, _id: 1 }).lean(),
-      CompanyAction.find({ userId, symbol: { $in: allSymbols } }).sort({ date: 1, _id: 1 }).lean()
+      Trade.find({ userId, symbol: { $in: allSymbols } }).sort({ date: 1, settlementOrder: 1, _id: 1 }).lean(),
+      CompanyAction.find({ userId, symbol: { $in: allSymbols } }).sort({ date: 1, settlementOrder: 1, _id: 1 }).lean()
     ]);
 
     const tradesBySymbol = new Map();
@@ -751,11 +802,12 @@ exports.batchGetHistoryHoldingGroups = async (req, res) => {
       actionsBySymbol.get(key).push(action);
     });
 
+    const corporateActions = await CorporateAction.find({ userId, date: { $lte: new Date() } }).lean();
     const list = normalizedSymbols.map((symbol) => {
       const symbolTrades = tradesBySymbol.get(symbol) || [];
       const symbolActions = actionsBySymbol.get(symbol) || [];
       const groups = addActionsToHoldingGroups({
-        groups: calculatePositionZeroGroups({ trades: symbolTrades, rates }),
+        groups: calculatePositionZeroGroups({ trades: symbolTrades, rates, actions: corporateActions.filter(action => normalizeSymbol(action.symbol) === symbol) }),
         trades: symbolTrades,
         actions: symbolActions
       });
@@ -781,10 +833,10 @@ exports.deleteHolding = async (req, res) => {
     }
 
     const symbolSet = Array.from(new Set([holding.symbol, normalized, ...aliases, ...buildSymbolAliases(holding.symbol)]));
-    
+
     const earliestTrade = await Trade.findOne({ userId, symbol: { $in: symbolSet } }).sort({ date: 1 });
     const earliestDateStr = earliestTrade?.date?.toISOString().slice(0, 10);
-    
+
     const tradeDeleteResult = await Trade.deleteMany({ userId, symbol: { $in: symbolSet } });
     await Holding.deleteOne({ _id: holding._id });
 
@@ -845,11 +897,7 @@ exports.addTrade = async (req, res) => {
     }
 
     // 根据 symbol/market 推断币种，避免港股/美股误存为 CNY
-    const derivedCurrency = getCurrencyForMarket({ symbol, market });
-    if (currency && String(currency).trim().toUpperCase() !== derivedCurrency) {
-      return res.status(400).json({ message: 'Requested currency conflicts with the instrument market' });
-    }
-    currency = derivedCurrency;
+    currency = inferCurrencyFromSymbol(symbol, market, currency);
     mood = mood ? String(mood).trim().toUpperCase() : 'NEUTRAL';
     news = news === undefined ? null : sanitizeHtml(news);
     if (marketOverview !== undefined && marketOverview !== null && typeof marketOverview !== 'object') {
@@ -908,12 +956,6 @@ exports.addTrade = async (req, res) => {
       }
     }
 
-    const rates = await getRates();
-    const fxRateToCNY = Number(rates[currency]);
-    if (!Number.isFinite(fxRateToCNY) || fxRateToCNY <= 0) return res.status(400).json({ message: 'Invalid exchange rate for ' + currency });
-    const grossAmount = toMoney(price * quantity);
-    const netSettlementAmount = toMoney(type === 'BUY' ? grossAmount + commission : grossAmount - commission);
-
     // 创建交易记录
     const trade = new Trade({
       userId: req.user._id,
@@ -928,10 +970,7 @@ exports.addTrade = async (req, res) => {
       feeMode,
       feeRate: feeMode === 'rate' ? feeRate : null,
       feeAmount: feeMode === 'amount' ? (Number(feeAmount) || 0) : null,
-      currency,
-      fxRateToCNY: toMoney(fxRateToCNY),
-      grossAmount,
-      netSettlementAmount,
+      currency: currency || 'CNY',
       market: tradeMarket,
       mood,
       marketOverview: snapshotFields.marketOverview,
@@ -944,8 +983,8 @@ exports.addTrade = async (req, res) => {
       cognitiveBias: cognitiveBias === undefined ? null : String(cognitiveBias).trim() || null,
       improvementMeasures: improvementMeasures === undefined ? null : String(improvementMeasures).trim() || null
     });
-    const ledgerValidation = await validateCandidateLedger({ userId: req.user._id, candidateTrade: trade });
-    if (!ledgerValidation.valid) return res.status(400).json({ message: ledgerValidation.message });
+    const validation = await validateTradeEditQuantity({ userId: req.user._id, updates: { append: trade.toObject() } });
+    if (!validation.valid) return res.status(400).json({ message: validation.message });
     await trade.save();
 
     // 基于全量账本重建资产与持仓，避免手动更新与重建结果不一致
@@ -953,7 +992,7 @@ exports.addTrade = async (req, res) => {
     await upsertTodayDailyProfit(req.user._id);
 
     // 标记脏数据：从交易日期开始由后台异步重新计算
-    const tradeDateStr = getDateStringInOffset(BEIJING_OFFSET_MINUTES, trade.date);
+    const tradeDateStr = getDateStringInOffset(480, trade.date);
     await scheduleRecalc(req.user._id, tradeDateStr);
 
     // 更新用户手续费偏好（按市场记录最近一次的 mode 和数值）
@@ -971,7 +1010,7 @@ exports.addTrade = async (req, res) => {
 
     res.status(201).json(trade);
   } catch (error) {
-    if (error?.name === 'ValidationError') {
+    if (error?.name === 'ValidationError' || error instanceof RangeError) {
       return res.status(400).json({ message: error.message });
     }
     res.status(500).json({ message: error.message });
@@ -1096,19 +1135,7 @@ exports.updateTrade = async (req, res) => {
       }
     }
 
-    // 7. Economic corrections relock settlement values at correction-time FX.
-    if (hasCommissionRelatedChange) {
-      const rates = await getRates();
-      const fxRateToCNY = Number(rates[trade.currency]);
-      if (!Number.isFinite(fxRateToCNY) || fxRateToCNY <= 0) return res.status(400).json({ message: 'Invalid exchange rate for ' + trade.currency });
-      const grossAmount = toMoney((updates.price ?? trade.price) * (updates.quantity ?? trade.quantity));
-      const commissionAmount = Number(updates.commission ?? trade.commission);
-      updates.fxRateToCNY = toMoney(fxRateToCNY);
-      updates.grossAmount = grossAmount;
-      updates.netSettlementAmount = toMoney(trade.type === 'BUY' ? grossAmount + commissionAmount : grossAmount - commissionAmount);
-    }
-
-    // 8. 应用更新并保存
+    // 7. 应用更新并保存
     Object.assign(trade, updates);
     if (!trade.mood) trade.mood = 'NEUTRAL';
     await trade.save();
@@ -1117,12 +1144,12 @@ exports.updateTrade = async (req, res) => {
     await rebuildAssetFromLedger(req.user._id);
     await upsertTodayDailyProfit(req.user._id);
 
-    const tradeDateStr = getDateStringInOffset(BEIJING_OFFSET_MINUTES, trade.date);
+    const tradeDateStr = getDateStringInOffset(480, trade.date);
     await scheduleRecalc(req.user._id, tradeDateStr);
 
     res.json(trade);
   } catch (error) {
-    if (error?.name === 'ValidationError') {
+    if (error?.name === 'ValidationError' || error instanceof RangeError) {
       return res.status(400).json({ message: error.message });
     }
     res.status(500).json({ message: error.message });
@@ -1192,15 +1219,15 @@ exports.deleteTradeById = async (req, res) => {
     if (!trade) {
       return res.status(404).json({ message: messages.TRADE_NOT_FOUND });
     }
-    const ledgerValidation = await validateCandidateLedger({ userId: req.user._id, excludedTradeId: trade._id });
-    if (!ledgerValidation.valid) return res.status(400).json({ message: ledgerValidation.message });
-    await Trade.deleteOne({ _id: trade._id, userId: req.user._id });
 
+    const validation = await validateTradeEditQuantity({ userId: req.user._id, editedTradeId: id, updates: { remove: true } });
+    if (!validation.valid) return res.status(400).json({ message: validation.message });
+    await trade.deleteOne();
     await rebuildAssetFromLedger(req.user._id);
     await upsertTodayDailyProfit(req.user._id);
 
     // 标记脏数据：从交易日期开始由后台异步重新计算
-    const tradeDateStr = getDateStringInOffset(BEIJING_OFFSET_MINUTES, trade.date);
+    const tradeDateStr = getDateStringInOffset(480, trade.date);
     await scheduleRecalc(req.user._id, tradeDateStr);
 
     res.json({ message: 'Trade deleted successfully', id });

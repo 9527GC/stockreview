@@ -5,6 +5,7 @@ export default defineConfig({
   plugins: [
     uni(),
   ],
+  build: { commonjsOptions: { include: [/node_modules/, /packages[\\/]stock-search/] } },
   test: {
     environment: 'jsdom',
     globals: true,

@@ -24,7 +24,7 @@ describe('monthly snapshot costs', () => {
 
   afterAll(async () => { await User.deleteMany({ _id: userId }); });
 
-  test('月度快照保存标准加权成本，不保存摊薄成本或零成本', async () => {
+  test('月度快照保存生产摊薄成本', async () => {
     await Asset.create({ userId, totalAssets: 1000, cash: 0, holdingsMarketValue: 1000, totalProfit: 0 });
     await Trade.create([
       { userId, symbol: '600519.SH', name: '贵州茅台', type: 'BUY', price: 100, quantity: 100, commission: 0, currency: 'CNY', fxRateToCNY: 1, grossAmount: 10000, netSettlementAmount: 10000, date: new Date('2026-08-01T01:30:00.000Z') },
@@ -35,6 +35,6 @@ describe('monthly snapshot costs', () => {
     const snapshot = await Snapshot.findOne({ userId, type: 'monthly', period: '2026-08' }).lean();
 
     expect(snapshot.holdings).toHaveLength(1);
-    expect(snapshot.holdings[0].avgCost).toBe(100);
+    expect(snapshot.holdings[0].avgCost).toBe(80);
   });
 });

@@ -1,12 +1,12 @@
 const mongoose = require('mongoose');
-require('../src/index');
-const User = require('../src/models/User');
-const { Trade, Holding } = require('../src/models/Trade');
-const Transfer = require('../src/models/Transfer');
-const { Asset } = require('../src/models/Asset');
-const DailyProfit = require('../src/models/DailyProfit');
-const DailyRevenue = require('../src/models/DailyRevenue');
-const { resetUserBusinessData, runCli } = require('../scripts/reset-user-business-data');
+require('../../src/index');
+const User = require('../../src/models/User');
+const { Trade, Holding } = require('../../src/models/Trade');
+const Transfer = require('../../src/models/Transfer');
+const { Asset } = require('../../src/models/Asset');
+const DailyProfit = require('../../src/models/DailyProfit');
+const DailyRevenue = require('../../src/models/DailyRevenue');
+const { resetUserBusinessData, runCli } = require('../../scripts/reset-user-business-data');
 
 jest.setTimeout(15000);
 

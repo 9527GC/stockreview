@@ -78,7 +78,10 @@
 
         <div class="section-title" style="margin-top: 16px; display: flex; justify-content: space-between; align-items: center;">
           <span>操作记录</span>
-          <a-button type="primary" size="small" @click="handleAddTrade">添加交易</a-button>
+          <a-space>
+            <a-button size="small" @click="corporateActionOpen = true">添加公司行动</a-button>
+            <a-button type="primary" size="small" @click="handleAddTrade">添加交易</a-button>
+          </a-space>
         </div>
         <div class="table-wrapper">
           <a-table
@@ -130,6 +133,7 @@
           :initial-data="initialTradeData"
           @success="onAddSuccess"
         />
+        <CorporateActionModal v-model:open="corporateActionOpen" :initial-stock="holding" @changed="onCorporateActionChanged" />
       </div>
     </template>
   </a-modal>
@@ -143,6 +147,7 @@ import { getCurrentHoldingTrades } from '@/api/index';
 import { normalizeSymbol } from '@/utils/stock';
 import { useTradeStore } from '@/stores/trade';
 import TradeModal from './TradeModal.vue';
+import CorporateActionModal from './CorporateActionModal.vue';
 
 const props = defineProps({
   open: Boolean,
@@ -263,6 +268,12 @@ const editModalOpen = ref(false);
 const editingTrade = ref(null);
 
 const addModalOpen = ref(false);
+const corporateActionOpen = ref(false);
+const onCorporateActionChanged = async () => {
+  corporateActionOpen.value = false;
+  await fetchOperations();
+  emit('changed', props.holding?.symbol);
+};
 const initialTradeData = computed(() => {
   if (!props.holding) return {};
   return {

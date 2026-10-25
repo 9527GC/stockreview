@@ -3,6 +3,18 @@ const { normalizeSymbol } = require('../utils/symbol');
 const { getDateStringInOffset, parseDateInOffset } = require('../utils/datetime');
 const { rebuildAssetFromLedger } = require('./tradeController');
 const dirtyDataManager = require('../services/dirtyDataManager');
+const { Trade } = require('../models/Trade');
+const { calculateDilutedPerformance } = require('../utils/cost');
+
+// Validate the proposed timeline before persisting an edit that changes available shares.
+const validateTimeline = async (userId, replacement, removedId = null) => {
+  const [trades, actions] = await Promise.all([
+    Trade.find({ userId }).lean(), CorporateAction.find({ userId }).lean()
+  ]);
+  const proposed = actions.filter(action => String(action._id) !== String(removedId));
+  if (replacement) proposed.push(replacement);
+  calculateDilutedPerformance({ trades, actions: proposed.filter(action => action.date <= new Date()), strict: true });
+};
 
 const validate = (body) => {
   const type = String(body.type || '').toUpperCase();
@@ -36,19 +48,30 @@ exports.list = async (req, res) => {
 exports.create = async (req, res) => {
   try {
     const parsed = validate(req.body); if (parsed.error) return res.status(400).json({ message: parsed.error });
+    await validateTimeline(req.user._id, parsed.value);
     const action = await CorporateAction.create({ userId: req.user._id, ...parsed.value });
     await recalc(req.user._id, action.date); res.status(201).json(action);
-  } catch (error) { res.status(error?.code === 11000 ? 409 : 500).json({ message: error?.code === 11000 ? '同一证券在同一日期只能新增一条公司行动' : error.message }); }
+  } catch (error) { res.status(error?.code === 11000 ? 409 : error instanceof RangeError ? 400 : 500).json({ message: error?.code === 11000 ? '同一证券在同一日期只能新增一条公司行动' : error.message }); }
 };
 exports.update = async (req, res) => {
   try { const parsed = validate(req.body); if (parsed.error) return res.status(400).json({ message: parsed.error });
     const previous = await CorporateAction.findOne({ _id: req.params.id, userId: req.user._id });
     if (!previous) return res.status(404).json({ message: '公司行动不存在' });
+    await validateTimeline(req.user._id, parsed.value, previous._id);
     const action = await CorporateAction.findByIdAndUpdate(previous._id, parsed.value, { new: true, runValidators: true });
     const firstAffectedDate = previous.date < action.date ? previous.date : action.date;
     await recalc(req.user._id, firstAffectedDate);
     res.json(action);
-  } catch (error) { res.status(error?.code === 11000 ? 409 : 500).json({ message: error?.code === 11000 ? '同一证券在同一日期只能新增一条公司行动' : error.message }); }
+  } catch (error) { res.status(error?.code === 11000 ? 409 : error instanceof RangeError ? 400 : 500).json({ message: error?.code === 11000 ? '同一证券在同一日期只能新增一条公司行动' : error.message }); }
 };
-exports.remove = async (req, res) => { try { const action = await CorporateAction.findOneAndDelete({ _id: req.params.id, userId: req.user._id }); if (!action) return res.status(404).json({ message: '公司行动不存在' }); await recalc(req.user._id, action.date); res.json({ id: action._id }); } catch (error) { res.status(500).json({ message: error.message }); } };
+exports.remove = async (req, res) => {
+  try {
+    const action = await CorporateAction.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!action) return res.status(404).json({ message: '公司行动不存在' });
+    await validateTimeline(req.user._id, null, action._id);
+    await action.deleteOne();
+    await recalc(req.user._id, action.date);
+    res.json({ id: action._id });
+  } catch (error) { res.status(error instanceof RangeError ? 400 : 500).json({ message: error.message }); }
+};
 

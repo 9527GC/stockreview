@@ -2,7 +2,7 @@
   <a-modal :open="open" :title="mode === 'edit' ? '编辑公司行动' : '添加公司行动'" :footer="null" width="560px" @update:open="$emit('update:open', $event)">
     <a-form layout="vertical" :model="form" @finish="submit">
       <a-form-item label="股票" required>
-        <a-select v-model:value="form.symbol" show-search :filter-option="false" :options="stockOptions" :not-found-content="searching ? undefined : '输入股票代码或名称搜索'" placeholder="输入股票代码或名称搜索" @search="handleSearch" @select="handleStockSelect" />
+        <a-select v-model:value="form.symbol" show-search :filter-option="false" :options="stockOptions" :not-found-content="searching ? undefined : '名称 / 代码 / 首字母 / 全拼'" placeholder="名称 / 代码 / 首字母 / 全拼" @search="handleSearch" @select="handleStockSelect" />
       </a-form-item>
       <a-form-item label="行动日期" required><a-date-picker v-model:value="form.date" style="width:100%" show-time /></a-form-item>
       <a-form-item label="行动类型" required>

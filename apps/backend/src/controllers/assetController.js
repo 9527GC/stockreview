@@ -1,10 +1,15 @@
 const { Asset } = require('../models/Asset');
+const { Trade } = require('../models/Trade');
+const Transfer = require('../models/Transfer');
 const DailyProfit = require('../models/DailyProfit');
 const DailyRevenue = require('../models/DailyRevenue');
+const { getRates } = require('../utils/currency');
 const { buildBenchmarkCurvePoints } = require('../utils/marketData');
+const { calculateCashAndPrincipalCNY } = require('../utils/ledger');
 const { round2 } = require('../utils/pnl');
 const { upsertTodayDailyProfit, getDateStringInOffset } = require('../utils/dailyProfitBackfill');
 const { getMonthStartBaseline } = require('../utils/monthlyBaseline');
+const { parseDateInOffset } = require('../utils/datetime');
 const { refreshAssetMarketValue } = require('../utils/assetSnapshot');
 
 exports.getSummary = async (req, res) => {
@@ -20,9 +25,7 @@ exports.getSummary = async (req, res) => {
         cash: 0,
         holdingsMarketValue: 0,
         currentPrincipal: 0,
-        totalHoldingsCount: 0,
-        valuationQuality: 'complete',
-        cashByCurrency: { CNY: 0, HKD: 0, USD: 0 }
+        totalHoldingsCount: 0
       });
     }
 
@@ -36,17 +39,14 @@ exports.getSummary = async (req, res) => {
         cash: 0,
         holdingsMarketValue: 0,
         currentPrincipal: 0,
-        totalHoldingsCount: 0,
-        valuationQuality: 'complete',
-        cashByCurrency: { CNY: 0, HKD: 0, USD: 0 }
+        totalHoldingsCount: 0
       });
     }
 
     const totalProfit = round2((refreshedAsset.totalAssets || 0) - (refreshedAsset.currentPrincipal || 0));
+
     const dailyProfitDate = await upsertTodayDailyProfit(userId);
-    const todaySnapshot = dailyProfitDate
-      ? await DailyProfit.findOne({ userId, date: dailyProfitDate }).lean()
-      : null;
+    const todaySnapshot = dailyProfitDate ? await DailyProfit.findOne({ userId, date: dailyProfitDate }).lean() : null;
     const totalDailyProfit = Number(todaySnapshot?.dailyProfitAmount) || 0;
     if (dailyProfitDate) res.set('X-ProfitHistory-Date', dailyProfitDate);
     res.json({
@@ -56,9 +56,7 @@ exports.getSummary = async (req, res) => {
       cash: refreshedAsset.cash,
       holdingsMarketValue: refreshedAsset.holdingsMarketValue,
       currentPrincipal: refreshedAsset.currentPrincipal,
-      totalHoldingsCount: refreshedAsset.totalHoldingsCount,
-      valuationQuality: refreshedAsset.valuationQuality || 'partial',
-      cashByCurrency: Object.fromEntries(refreshedAsset.cashBalances || [])
+      totalHoldingsCount: refreshedAsset.totalHoldingsCount
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -124,10 +122,9 @@ exports.getProfitCalendar = async (req, res) => {
     const mm = String(month).padStart(2, '0');
     const startStr = `${year}-${mm}-01`;
 
-    const endDay = (year === todayY && month === todayM)
-      ? todayD
-      : new Date(Date.UTC(year, month, 0)).getUTCDate();
-    const endStr = `${year}-${mm}-${String(endDay).padStart(2, '0')}`;
+    const endStr = (year === todayY && month === todayM)
+      ? todayStr
+      : new Date(year, month, 0).toISOString().slice(0, 10);
 
     const [dailyData, baseline] = await Promise.all([
       DailyRevenue.find({
@@ -138,20 +135,21 @@ exports.getProfitCalendar = async (req, res) => {
     ]);
 
     const profitByDate = new Map(dailyData.map(d => [d.date, d.revenue]));
-    const returnByDate = new Map(dailyData.map(d => [d.date, d.returnRate]));
-    const qualityByDate = new Map(dailyData.map(d => [d.date, d.valuationQuality || 'partial']));
 
     const dailyProfits = {};
-    const dailyReturns = {};
-    const valuationQualityByDate = {};
+    const dailyReturns = Object.fromEntries(dailyData.map(d => [d.date, d.returnRate]));
+    const valuationQualityByDate = Object.fromEntries(dailyData.map(d => [d.date, d.valuationQuality]));
     let upDays = 0, downDays = 0, totalProfit = 0;
 
-    for (let day = 1; day <= endDay; day++) {
-      const dateStr = `${year}-${mm}-${String(day).padStart(2, '0')}`;
+    const startDate = new Date(Date.UTC(year, month - 1, 1));
+    const endDate = (year === todayY && month === todayM)
+      ? new Date(Date.UTC(todayY, todayM - 1, todayD))
+      : new Date(Date.UTC(year, month - 1, new Date(year, month, 0).getDate()));
+
+    for (let d = new Date(startDate); d <= endDate; d = new Date(d.getTime() + 24 * 60 * 60 * 1000)) {
+      const dateStr = d.toISOString().slice(0, 10);
       const profitAmount = Number(profitByDate.get(dateStr) ?? 0);
       dailyProfits[dateStr] = profitAmount;
-      dailyReturns[dateStr] = Number(returnByDate.get(dateStr) ?? 0);
-      valuationQualityByDate[dateStr] = qualityByDate.get(dateStr) || 'partial';
       if (profitAmount > 0) upDays++;
       else if (profitAmount < 0) downDays++;
       totalProfit += profitAmount;

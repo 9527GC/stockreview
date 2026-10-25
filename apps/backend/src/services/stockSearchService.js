@@ -1,3 +1,5 @@
+const { normalizeSymbol } = require('../utils/symbol');
+const { matchesStock, normalizeSearch, pinyinInitialQueries } = require('@stock-review/stock-search');
 const { requestText, fetchJson } = require('../utils/marketData');
 
 const MOCK_SUGGESTIONS = [
@@ -147,14 +149,10 @@ const searchEastmoney = async (keyword) => {
 };
 
 const searchMock = (keyword) => {
-  const lowerKeyword = String(keyword || '').toLowerCase();
-  return MOCK_SUGGESTIONS.filter((s) =>
-    s.symbol.toLowerCase().includes(lowerKeyword) ||
-    s.name.includes(keyword)
-  );
+  return MOCK_SUGGESTIONS.filter(s => matchesStock(s, keyword));
 };
 
-const searchStock = async (keyword) => {
+const searchProviders = async (keyword) => {
   if (!keyword || !String(keyword).trim()) {
     return { suggestions: [], source: 'none' };
   }
@@ -183,6 +181,42 @@ const searchStock = async (keyword) => {
 
   // 3. Mock 兜底
   return { suggestions: searchMock(trimmed), source: 'mock' };
+};
+
+const remoteCache = new Map();
+const findRemote = async keyword => {
+  const key = normalizeSearch(keyword);
+  const cached = remoteCache.get(key);
+  if (cached && cached.expires > Date.now()) return cached.promise;
+  const promise = searchProviders(keyword);
+  if (remoteCache.size >= 500) remoteCache.clear();
+  remoteCache.set(key, { promise, expires: Date.now() + 60000 });
+  return promise;
+};
+const searchStock = async (keyword, { userId } = {}) => {
+  const query = normalizeSearch(keyword);
+  if (!query) return { suggestions: [], source: 'none' };
+  let known = [];
+  if (userId) {
+    const { Trade } = require('../models/Trade');
+    known = await Trade.find({ userId }).select('symbol name market').lean();
+    known = known.filter(stock => matchesStock(stock, query));
+  }
+  const providerQuery = String(keyword).trim().replace(/^([a-z0-9]+)\.(SH|SZ|BJ|HK|US)$/i, '$1').replace(/^(SH|SZ|BJ|HK)(\d+)$/i, '$2');
+  let result = await findRemote(normalizeSearch(providerQuery));
+  let remote = result.suggestions.filter(stock => matchesStock(stock, query));
+  if ((!remote.length || result.source === 'mock') && !known.length) {
+    for (const initials of pinyinInitialQueries(query)) {
+      const candidate = await findRemote(initials);
+      const matches = candidate.suggestions.filter(stock => matchesStock(stock, query));
+      if (matches.length && candidate.source !== 'mock') { result = candidate; remote = matches; break; }
+    }
+  }
+  const suggestions = deduplicateSuggestions([...known, ...remote]).map(stock => {
+    const symbol = normalizeSymbol(stock.symbol);
+    return { symbol, name: stock.name, market: symbol.split('.').pop() };
+  });
+  return { suggestions, source: known.length ? 'ledger' : result.source };
 };
 
 module.exports = {

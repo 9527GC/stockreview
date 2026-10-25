@@ -1,7 +1,7 @@
-const { buildLedger } = require('../src/utils/ledger');
-const Transfer = require('../src/models/Transfer');
-const { Trade } = require('../src/models/Trade');
-const { Asset } = require('../src/models/Asset');
+const { buildLedger } = require('../../src/utils/ledger');
+const Transfer = require('../../src/models/Transfer');
+const { Trade } = require('../../src/models/Trade');
+const { Asset } = require('../../src/models/Asset');
 
 describe('ledger model fields', () => {
   test('流水模型保留锁定汇率与原始币种清算金额，资产保留分币种现金', () => {

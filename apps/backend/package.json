@@ -8,8 +8,6 @@
     "start:prod": "NODE_ENV=production node src/index.js",
     "dev": "node src/index.js",
     "snapshot:profit-history": "node scripts/snapshot_profit_history.js",
-    "reset:user-business-data": "node scripts/reset-user-business-data.js",
-    "reset:all-business-data": "node scripts/reset-user-business-data.js",
     "lint": "eslint src/",
     "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --runInBand --forceExit",
     "audit": "npm audit"
@@ -18,6 +16,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@stock-review/stock-search": "file:../../packages/stock-search",
     "axios": "^1.18.1",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",

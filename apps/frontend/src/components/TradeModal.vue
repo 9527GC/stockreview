@@ -18,7 +18,7 @@
             <a-select
               v-model:value="formState.symbol"
               show-search
-              placeholder="输入代码/名称/首字母搜索"
+              placeholder="名称 / 代码 / 首字母 / 全拼"
               :options="allStockOptions"
               :filter-option="false"
               @search="handleSearch"
@@ -235,6 +235,7 @@
 </template>
 
 <script setup>
+import { matchesStock } from '@stock-review/stock-search';
 import { reactive, watch, ref, nextTick, computed, onUnmounted } from 'vue';
 import { useTradeStore } from '@/stores/trade';
 import { message } from 'ant-design-vue';
@@ -612,11 +613,7 @@ const allStockOptions = computed(() => {
   const keyword = String(searchInput.value || '').trim().toUpperCase();
   if (apiStockOptions.value.length > 0) return apiStockOptions.value;
   if (!keyword) return stockOptions;
-  return stockOptions.filter(s =>
-    s.value.toUpperCase().includes(keyword) ||
-    s.name.toUpperCase().includes(keyword) ||
-    (s.pinyin || '').toUpperCase().includes(keyword)
-  );
+  return stockOptions.filter(s => matchesStock(s, keyword));
 });
 
 const saveSelection = () => {

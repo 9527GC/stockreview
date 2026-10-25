@@ -172,6 +172,10 @@ export const getRealTimeQuote = (symbol) => {
   });
 };
 
+export const getRealTimeQuotes = (symbols) => request({
+  url: '/api/market/quote', method: 'GET', params: { symbols: symbols.join(',') }, silent: true
+});
+
 // User Profile
 export const getProfile = () => {
   return request({

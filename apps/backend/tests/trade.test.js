@@ -102,7 +102,7 @@ describe('Trade API', () => {
     expect(res.body.message).toMatch(/currency/i);
   });
 
-  test('外币交易持久化锁定汇率和清算金额，并由账本重建分币种现金', async () => {
+  test('外币交易按生产汇率计算人民币现金', async () => {
     const res = await request(app)
       .post('/api/trades')
       .set('Authorization', `Bearer ${token}`)
@@ -119,9 +119,7 @@ describe('Trade API', () => {
     expect(res.statusCode).toBe(201);
     expect(res.body).toMatchObject({
       currency: 'USD',
-      fxRateToCNY: 7.2,
-      grossAmount: 30,
-      netSettlementAmount: 31
+      price: 10, quantity: 3, commission: 1
     });
 
     const [trade, asset] = await Promise.all([
@@ -130,15 +128,13 @@ describe('Trade API', () => {
     ]);
     expect(trade.toObject()).toMatchObject({
       currency: 'USD',
-      fxRateToCNY: 7.2,
-      grossAmount: 30,
-      netSettlementAmount: 31
+      price: 10, quantity: 3, commission: 1
     });
-    expect(asset.cashBalances.get('USD')).toBe(-31);
+
     expect(asset.cash).toBe(-223.2);
   });
 
-  test('复盘字段编辑保留锁定金额，经济字段更正使用更正时汇率同步重算', async () => {
+  test('复盘编辑保留交易金额，经济字段更正按当前汇率重算', async () => {
     const created = await request(app)
       .post('/api/trades')
       .set('Authorization', `Bearer ${token}`)
@@ -159,9 +155,7 @@ describe('Trade API', () => {
 
     expect(reviewOnly.statusCode).toBe(200);
     expect(reviewOnly.body).toMatchObject({
-      fxRateToCNY: 7.2,
-      grossAmount: 20,
-      netSettlementAmount: 21
+      price: 10, quantity: 2, commission: 1
     });
 
     getRates.mockResolvedValue({ CNY: 1, USD: 7.3, HKD: 0.92 });
@@ -171,10 +165,9 @@ describe('Trade API', () => {
       .send({ price: 12, commission: 2 });
 
     expect(corrected.statusCode).toBe(200);
+    expect((await Asset.findOne({ userId })).cash).toBe(-189.8);
     expect(corrected.body).toMatchObject({
-      fxRateToCNY: 7.3,
-      grossAmount: 24,
-      netSettlementAmount: 26
+      price: 12, quantity: 2, commission: 2
     });
   });
   test('should update a trade without crashing (currency inference after fetch)', async () => {
@@ -697,5 +690,24 @@ describe('POST /api/trades/history-holdings/groups/batch', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({ symbols: ['', '   '] });
     expect(res2.statusCode).toBe(400);
+  });
+});
+
+describe('统一股票搜索入口', () => {
+  test.each(['海南', '002163', 'hnfz', 'hainanfazhan', 'HNFZ'])('复盘及历史持仓按 %s 搜索且在分页前筛选', async keyword => {
+    await Trade.insertMany([
+      { userId, symbol: '002163.SZ', name: '海南发展', type: 'BUY', price: 10, quantity: 100, date: new Date('2026-06-01T01:00:00Z'), currency: 'CNY', fxRateToCNY: 1, grossAmount: 1000, netSettlementAmount: 1000 },
+      { userId, symbol: '002163.SZ', name: '海南发展', type: 'SELL', price: 11, quantity: 100, date: new Date('2026-06-02T01:00:00Z'), currency: 'CNY', fxRateToCNY: 1, grossAmount: 1000, netSettlementAmount: 1000 },
+      { userId, symbol: '600519.SH', name: '贵州茅台', type: 'BUY', price: 10, quantity: 100, date: new Date('2026-06-03T01:00:00Z'), currency: 'CNY', fxRateToCNY: 1, grossAmount: 1000, netSettlementAmount: 1000 }
+    ]);
+    const trades = await request(app).get('/api/trades/reviews').query({ symbol: keyword, pageSize: 1 }).set('Authorization', `Bearer ${token}`);
+    expect(trades.statusCode).toBe(200);
+    expect(trades.body.total).toBe(2);
+    expect(trades.body.list).toHaveLength(1);
+    expect(trades.body.list[0].symbol).toBe('002163.SZ');
+    const history = await request(app).get('/api/trades/history-holdings').query({ keyword, pageSize: 1 }).set('Authorization', `Bearer ${token}`);
+    expect(history.statusCode).toBe(200);
+    expect(history.body.total).toBe(1);
+    expect(history.body.list[0].symbol).toBe('002163.SZ');
   });
 });

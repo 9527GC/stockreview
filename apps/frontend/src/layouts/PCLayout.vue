@@ -8,7 +8,11 @@
           <span>Stock Review</span>
         </div>
       </div>
-      <div class="header-right">
+      <div class="header-right" style="display: flex; align-items: center; gap: 12px;">
+         <a-button @click="isCompanyActionModalVisible = true">
+           <template #icon><ThunderboltOutlined /></template>
+           添加公司行动
+         </a-button>
          <a-button type="primary" @click="showAddModal">
            <template #icon><PlusOutlined /></template>
            添加交易
@@ -104,6 +108,7 @@
     </a-layout>
     
     <TradeModal v-model:open="isModalVisible" @success="handleAddSuccess" />
+    <CompanyActionModal v-model:open="isCompanyActionModalVisible" @success="handleCompanyActionSuccess" />
   </a-layout>
 </template>
 
@@ -115,16 +120,20 @@ import {
   LogoutOutlined,
   CopyrightOutlined,
   PlusOutlined,
+  ThunderboltOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   LeftOutlined,
   RightOutlined,
   UserOutlined
 } from '@ant-design/icons-vue';
+import CompanyActionModal from '@/components/CompanyActionModal.vue';
 import TradeModal from '@/components/TradeModal.vue';
 import { useTradeStore } from '@/stores/trade';
 import { useUserStore } from '@/stores/user';
 import { message } from 'ant-design-vue';
+
+const emit = defineEmits(['company-action-changed']);
 
 const props = defineProps({
   pageTitle: {
@@ -142,6 +151,10 @@ const userStore = useUserStore();
 const collapsed = ref(false);
 const selectedKeys = ref([props.activeKey]);
 const isModalVisible = ref(false);
+const isCompanyActionModalVisible = ref(false);
+const handleCompanyActionSuccess = symbol => {
+  emit('company-action-changed', symbol);
+};
 const safeAvatar = computed(() => {
   const avatar = userStore.userInfo?.avatar;
   if (!avatar || typeof avatar !== 'string') return undefined;

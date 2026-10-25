@@ -3,7 +3,7 @@ const { normalizeSymbol } = require('../utils/symbol');
 const { searchStock } = require('../services/stockSearchService');
 const messages = require('../utils/errorMessages');
 
-const MAX_KEYWORD_LENGTH = 20;
+const MAX_KEYWORD_LENGTH = 80;
 const KEYWORD_RE = /^[a-zA-Z0-9一-龥.\- ]+$/;
 
 exports.search = async (req, res) => {
@@ -19,7 +19,7 @@ exports.search = async (req, res) => {
       return res.status(400).json({ message: messages.KEYWORD_INVALID_CHARACTERS });
     }
 
-    const { suggestions, source } = await searchStock(keyword);
+    const { suggestions, source } = await searchStock(keyword, { userId: req.user?._id });
 
     res.set('X-Search-Source', source);
     res.json({ suggestions, source });
@@ -45,6 +45,12 @@ exports.getOverview = async (req, res) => {
 
 exports.getQuote = async (req, res) => {
   try {
+    if (req.query.symbols !== undefined) {
+      if (typeof req.query.symbols !== 'string') return res.status(400).json({ message: '证券代码列表格式错误' });
+      const symbols = [...new Set(req.query.symbols.split(',').map(s => s.trim()).filter(Boolean))];
+      if (!symbols.length || symbols.length > 100) return res.status(400).json({ message: '每次需查询 1 至 100 只证券' });
+      return res.json(await getQuotes(symbols.map(normalizeSymbol)));
+    }
     const { symbol } = req.query;
     if (!symbol) return res.status(400).json({ message: 'Symbol is required' });
 

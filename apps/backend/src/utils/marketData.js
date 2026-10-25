@@ -290,30 +290,19 @@ const getHistoricalIndexSeries = async ({ code, name, symbol, startDate, endDate
 };
 
 const buildBenchmarkCurvePoints = async ({ startDate, endDate, market = 'SH' }) => {
+  const { buildContinuousBenchmarkPoints } = require('./benchmarkContinuity');
+  // 起点可能处于长假，向前多取一个月以寻找最近有效收盘值。
+  const lookupStart = new Date(Date.parse(startDate) - 30 * 86400000).toISOString().slice(0, 10);
   const benchmark = getCnBenchmarkConfig({ symbol: market === 'SZ' ? '000001.SZ' : '600000.SH', market });
   const series = await getHistoricalIndexSeries({
     code: benchmark.code,
     name: benchmark.name,
     symbol: benchmark.symbol,
-    startDate,
+    startDate: lookupStart,
     endDate
   });
 
-  const basePoint = series.find((item) => item?.index !== null || item?.price !== null);
-  const baseClose = basePoint ? Number(basePoint.index ?? basePoint.price) : null;
-  if (!basePoint || !(baseClose > 0)) {
-    return { benchmarkName: benchmark.name, benchmarkSymbol: benchmark.symbol, pointsByDate: new Map() };
-  }
-
-  const pointsByDate = new Map();
-  series.forEach((item) => {
-    const dateStr = String(item.snapshotTime || '').slice(0, 10);
-    const close = Number(item.index ?? item.price);
-    const benchmarkValue = Number.isFinite(close) && close > 0
-      ? Number((((close / baseClose) - 1) * 100).toFixed(4))
-      : null;
-    pointsByDate.set(dateStr, benchmarkValue);
-  });
+  const pointsByDate = buildContinuousBenchmarkPoints(series, startDate, endDate);
 
   return { benchmarkName: benchmark.name, benchmarkSymbol: benchmark.symbol, pointsByDate };
 };
@@ -1226,14 +1215,6 @@ const parseSinaData = (code, dataStr) => {
   return result;
 };
 
-// Persist only a price whose own close date is explicit. `preClose` belongs to a prior
-// trading session and cannot safely inherit the current quote's date.
-const getQuoteLastClose = (quote) => {
-  const price = Number(quote?.close ?? quote?.lastClose);
-  const date = String(quote?.closeDate ?? quote?.lastCloseDate ?? '').trim();
-  if (!Number.isFinite(price) || price <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
-  return { price, date };
-};
 /**
  * 获取实时行情
  * @param {string|string[]} symbols 股票代码或代码数组
@@ -1448,7 +1429,6 @@ const getMarketOverview = async ({ date, forceRefresh = false } = {}) => {
 
 module.exports = {
   getQuotes,
-  getQuoteLastClose,
   getMarketOverview,
   buildTradeMarketSnapshot,
   buildBenchmarkCurvePoints,

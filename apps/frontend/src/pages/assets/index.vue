@@ -1,5 +1,5 @@
 <template>
-  <PCLayout pageTitle="我的资产" activeKey="assets">
+  <PCLayout pageTitle="我的资产" activeKey="assets" @company-action-changed="handleHoldingChanged">
     <div class="assets-content-wrapper">
       <a-row :gutter="[16, 16]">
         <a-col :xl="6" :lg="12" :md="12" :sm="24" :xs="24">
@@ -134,13 +134,9 @@
             <a-radio-button value="HK">港股</a-radio-button>
             <a-radio-button value="US">美股</a-radio-button>
           </a-radio-group>
+          <StockFilterInput v-model="holdingSearch" @update:model-value="currentPage = 1" />
         </div>
         <div style="display: flex; gap: 8px;">
-          <a-button @click="showCorporateActionModal">公司行动管理</a-button>
-          <a-button @click="showCompanyAction">
-            <template #icon><ThunderboltOutlined /></template>
-            添加公司行动
-          </a-button>
           <a-button @click="showHistoryModal">
             <template #icon><HistoryOutlined /></template>
             查看历史持仓
@@ -255,7 +251,6 @@
 
     <HistoryHoldingsModal v-model:open="isHistoryModalVisible" @deleted="handleHistoryChanged" @changed="handleHistoryChanged" />
     <HoldingDetailModal v-model:open="isHoldingDetailModalVisible" :holding="selectedHolding" @changed="handleHoldingChanged" />
-    <CompanyActionModal v-model:open="isCompanyActionModalVisible" @success="handleHoldingChanged" />
     <TransferModal v-model:open="isTransferModalVisible" @success="handleTransferSuccess" />
     <CorporateActionModal v-model:open="isCorporateActionModalVisible" @changed="handleCorporateActionChanged" />
     </div>
@@ -270,11 +265,12 @@ import ProfitCalendar from '@/components/ProfitCalendar.vue';
 import TransferModal from '@/components/TransferModal.vue';
 import CorporateActionModal from '@/components/CorporateActionModal.vue';
 import HistoryHoldingsModal from '@/components/HistoryHoldingsModal.vue';
+import { matchesStock } from '@stock-review/stock-search';
+import StockFilterInput from '@/components/StockFilterInput.vue';
 import HoldingDetailModal from '@/components/HoldingDetailModal.vue';
-import CompanyActionModal from '@/components/CompanyActionModal.vue';
 import { useTradeStore } from '@/stores/trade';
 import { getProfitCurve } from '@/api/index';
-import { ArrowUpOutlined, ArrowDownOutlined, HistoryOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
+import { ArrowUpOutlined, ArrowDownOutlined, HistoryOutlined } from '@ant-design/icons-vue';
 import { message, Modal } from 'ant-design-vue';
 import dayjs from 'dayjs';
 import { normalizeSymbol } from '@/utils/stock';
@@ -286,12 +282,12 @@ const isHistoryModalVisible = ref(false);
 const isTransferModalVisible = ref(false);
 const isCorporateActionModalVisible = ref(false);
 const isHoldingDetailModalVisible = ref(false);
-const isCompanyActionModalVisible = ref(false);
 const dateRange = ref([dayjs().startOf('month'), dayjs()]);
 const dateShortcut = ref('month');
 const selectedStock = ref({});
 const selectedHolding = ref(null);
 const marketFilter = ref('all');
+const holdingSearch = ref('');
 const currentPage = ref(1);
 const pageSize = ref(50);
 
@@ -333,7 +329,6 @@ const getHoldingMarket = (record) => {
   return 'CN';
 };
 
-const showCompanyAction = () => { isCompanyActionModalVisible.value = true; };
 
 const handleMarketChange = () => {
   currentPage.value = 1;
@@ -416,8 +411,9 @@ const columns = [
 ];
 
 const filteredHoldings = computed(() => {
-  if (marketFilter.value === 'all') return store.holdings;
-  return store.holdings.filter(h => getHoldingMarket(h) === marketFilter.value);
+  const keyword = holdingSearch.value.trim().toLowerCase();
+  return store.holdings.filter(h => (marketFilter.value === 'all' || getHoldingMarket(h) === marketFilter.value)
+    && matchesStock(h, keyword));
 });
 
 const sortedHoldings = computed(() => {

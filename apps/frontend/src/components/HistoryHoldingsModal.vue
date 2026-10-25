@@ -9,6 +9,7 @@
     wrapClassName="history-holdings-modal"
     :style="{ paddingBottom: 0 }"
   >
+    <div style="margin-bottom: 16px"><StockFilterInput v-model="stockSearch" @search="applyStockSearch" /></div>
     <a-table
       :columns="columns"
       :data-source="historyHoldings"
@@ -56,7 +57,8 @@
                 <a-tag v-if="group.hasAnomaly" color="orange" size="small">数据异常</a-tag>
               </div>
             </template>
-            <a-table
+
+    <a-table
               class="group-trades-table"
               :columns="innerColumns"
               :data-source="group.trades"
@@ -98,7 +100,7 @@
           </a-collapse-panel>
         </a-collapse>
       </template>
-      
+
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'stock'">
           <div style="font-weight: 500;">{{ record.name }}</div>
@@ -142,7 +144,8 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue';
+import StockFilterInput from './StockFilterInput.vue';
+import { computed, onUnmounted, ref, watch } from 'vue';
 import { useTradeStore } from '@/stores/trade';
 import { getHistoryHoldings, getHistoryHoldingGroups, deleteCompanyAction } from '@/api/index';
 import { message } from 'ant-design-vue';
@@ -160,6 +163,12 @@ const emit = defineEmits(['update:open', 'deleted', 'changed']);
 
 const store = useTradeStore();
 
+const stockSearch = ref('');
+let searchTimer;
+let historyRequest = 0;
+const applyStockSearch = () => { clearTimeout(searchTimer); currentPage.value = 1; expandedRowKeys.value = []; fetchHistoryHoldings(); };
+watch(stockSearch, () => { clearTimeout(searchTimer); searchTimer = setTimeout(applyStockSearch, 300); });
+onUnmounted(() => clearTimeout(searchTimer));
 const loading = ref(false);
 const historyHoldings = ref([]);
 const currentPage = ref(1);
@@ -201,17 +210,20 @@ const ensureExpandedState = (record) => {
 
 const fetchHistoryHoldings = async () => {
   if (!props.open) return;
+  const request = ++historyRequest;
   loading.value = true;
   try {
     const res = await getHistoryHoldings({
       page: currentPage.value,
       pageSize: pageSize.value,
+      keyword: stockSearch.value.trim(),
       sort: sort.value
     });
+    if (request !== historyRequest) return;
     historyHoldings.value = Array.isArray(res?.list) ? res.list : [];
     total.value = typeof res?.total === 'number' ? res.total : 0;
   } finally {
-    loading.value = false;
+    if (request === historyRequest) loading.value = false;
   }
 };
 

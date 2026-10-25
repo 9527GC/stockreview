@@ -1,13 +1,13 @@
 <template>
-  <PCLayout pageTitle="复盘日志" activeKey="review">
+  <PCLayout pageTitle="复盘日志" activeKey="review" @company-action-changed="handleSearch">
     <a-card :bordered="false" :body-style="{ padding: '24px' }" style="margin-bottom: 16px">
       <!-- Search Form -->
       <div class="table-page-search-wrapper">
         <a-form style="display: flex; align-items: center; min-height: 32px;">
           <a-row :gutter="24" style="width: 100%; align-items: center; margin-bottom: 0; flex-wrap: nowrap;">
             <a-col :flex="'280px'">
-              <a-form-item label="股票代码" style="margin-bottom: 0;">
-                <a-input v-model:value="searchSymbol" placeholder="请输入" style="width: 160px" />
+              <a-form-item label="股票搜索" style="margin-bottom: 0;">
+                <StockFilterInput v-model="searchSymbol" @search="handleSearch" />
               </a-form-item>
             </a-col>
             <a-col :flex="'640px'">
@@ -141,21 +141,24 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue';
+import { createAutoSearch } from '@/utils/autoSearch';
+import StockFilterInput from '@/components/StockFilterInput.vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import PCLayout from '@/layouts/PCLayout.vue';
 import { useTradeStore } from '@/stores/trade';
 import ReviewModal from '@/components/ReviewModal.vue';
 import { message } from 'ant-design-vue';
 import dayjs from 'dayjs';
+import { getRealTimeQuotes } from '@/api/index';
 
 const store = useTradeStore();
 const isReviewModalVisible = ref(false);
 const isReviewSaving = ref(false);
 const currentReviewRecord = ref({});
 const searchSymbol = ref('');
-const quickTimeRange = ref('month');
+const quickTimeRange = ref('quarter');
 const searchDateRange = ref([
-  dayjs().startOf('month'),
+  dayjs().subtract(3, 'month'),
   dayjs()
 ]);
 const currentPriceMap = ref({});
@@ -193,20 +196,19 @@ const handleQuickRangeChange = (e) => {
   handleSearch();
 };
 
-const handleSearch = () => {
-  store.loadTrades(buildQueryParams({ page: 1 }));
-};
+const autoSearch = createAutoSearch(() => store.loadReviews(buildQueryParams({ page: 1 })));
+const handleSearch = autoSearch.run;
+watch(searchSymbol, value => autoSearch.schedule(value), { flush: 'sync' });
+onUnmounted(autoSearch.cancel);
 
 const handleReset = () => {
+  autoSearch.cancel();
   searchSymbol.value = '';
-  quickTimeRange.value = 'month';
-  searchDateRange.value = [
-    dayjs().startOf('month'),
-    dayjs()
-  ];
+  quickTimeRange.value = 'quarter';
+  setDateRangeByShortcut('quarter');
   selectedTradeType.value = null;
   selectedReviewStatus.value = null;
-  store.loadTrades(buildQueryParams({ page: 1 }));
+  handleSearch();
 };
 
 const handleReview = (record) => {
@@ -236,6 +238,7 @@ const handleReviewSubmit = async (data) => {
 };
 
 const handleTableChange = (pagination, filters) => {
+  autoSearch.cancel();
   const nextPage = pagination?.current || 1;
   const nextPageSize = pagination?.pageSize || tablePagination.value.pageSize || defaultPageSize;
   const nextType = Array.isArray(filters?.type) ? (filters.type[0] || null) : (filters?.type || null);
@@ -244,40 +247,38 @@ const handleTableChange = (pagination, filters) => {
   const filterChanged = nextType !== selectedTradeType.value || nextReviewStatus !== selectedReviewStatus.value;
   selectedTradeType.value = nextType;
   selectedReviewStatus.value = nextReviewStatus;
-  store.loadTrades(buildQueryParams({
+  store.loadReviews(buildQueryParams({
     page: filterChanged ? 1 : nextPage,
     pageSize: nextPageSize
   }));
 };
 
-const CONCURRENT_QUOTE_LIMIT = 5;
+let priceRequestId = 0;
+const priceCache = new Map();
 
 const loadCurrentPrices = async (records = []) => {
+  const requestId = ++priceRequestId;
   const symbols = [...new Set(records.map(record => record.symbol).filter(Boolean))];
   if (symbols.length === 0) {
     currentPriceMap.value = {};
     return;
   }
 
-  const results = [];
-  const queue = [...symbols];
-
-  const worker = async () => {
-    while (queue.length > 0) {
-      const symbol = queue.shift();
-      const quote = await store.fetchRealTimeQuote(symbol);
-      const price = quote?.price !== undefined && quote?.price !== null ? Number(quote.price) : null;
-      results.push([symbol, Number.isFinite(price) ? price : null]);
+  const missing = symbols.filter(symbol => !priceCache.has(symbol) || Date.now() - priceCache.get(symbol).at > 60000);
+  try {
+    for (let i = 0; i < missing.length; i += 100) {
+      const quotes = await getRealTimeQuotes(missing.slice(i, i + 100));
+      for (const symbol of missing.slice(i, i + 100)) {
+        const quote = quotes[symbol] || Object.values(quotes).find(q => q?.symbol === symbol);
+        const price = quote?.price == null ? null : Number(quote.price);
+        if (Number.isFinite(price) && price > 0) priceCache.set(symbol, { price, at: Date.now() });
+      }
     }
-  };
-
-  const workers = Array.from({ length: Math.min(CONCURRENT_QUOTE_LIMIT, symbols.length) }, worker);
-  await Promise.all(workers);
-
-  currentPriceMap.value = results.reduce((acc, [symbol, price]) => {
-    if (price !== null) acc[symbol] = price;
-    return acc;
-  }, {});
+  } catch {
+    // 报价为辅助信息，请求失败时沿用已缓存值，不干扰复盘日志查询。
+  }
+  if (requestId !== priceRequestId) return;
+  currentPriceMap.value = Object.fromEntries(symbols.filter(s => priceCache.has(s)).map(s => [s, priceCache.get(s).price]));
 };
 
 const getCurrencyCode = (recordOrSymbol) => {
@@ -364,7 +365,7 @@ watch(displayData, (records) => {
 }, { immediate: true });
 
 onMounted(() => {
-  store.loadTrades(buildQueryParams({ page: 1 }));
+  store.loadReviews(buildQueryParams({ page: 1 }));
 });
 
 const formatDate = (date) => {
@@ -436,7 +437,7 @@ const getMoodTagStyle = (mood) => {
 };
 
 const handleTradeSuccess = () => {
-  store.loadTrades(buildQueryParams({ page: 1 }));
+  store.loadReviews(buildQueryParams({ page: 1 }));
 };
 </script>
 

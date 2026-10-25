@@ -1,77 +1,48 @@
 <template>
-  <a-modal :open="open" title="公司行动管理" width="900px" :footer="null" @cancel="emit('update:open', false)">
-    <a-alert
-      type="info"
-      show-icon
-      style="margin-bottom: 16px"
-      message="公司行动会独立保存并自动重算持仓、成本、现金与收益，不会生成 0 元买卖或手续费。同一证券同一天只能新增一条公司行动。"
-    />
-    <a-form layout="inline" :model="form" style="margin-bottom: 12px">
-      <a-form-item>
-        <a-select
-          v-model:value="form.symbol"
-          show-search
-          placeholder="输入代码、名称或首字母搜索"
-          :options="allStockOptions"
-          :filter-option="false"
-          style="width: 250px"
-          @search="handleSearch"
-          @select="handleStockSelect"
-        />
+  <a-modal :open="open" title="添加公司行动" width="560px" ok-text="保存" cancel-text="取消" :confirm-loading="saving" @ok="save" @cancel="emit('update:open', false)">
+    <a-alert type="info" show-icon class="action-notice" message="保存后自动重算持仓、成本、现金与收益。" description="同一证券同一天只能新增一条公司行动，不会生成买卖交易或手续费。" />
+    <a-form layout="vertical" :model="form" class="action-form">
+      <a-form-item label="股票代码 / 名称" required>
+        <a-select v-model:value="form.symbol" show-search placeholder="名称 / 代码 / 首字母 / 全拼" :options="allStockOptions" :filter-option="false" @search="handleSearch" @select="handleStockSelect" />
       </a-form-item>
-      <a-form-item>
-        <a-select v-model:value="form.type" style="width: 130px">
-          <a-select-option v-for="type in types" :key="type.value" :value="type.value">{{ type.label }}</a-select-option>
+      <a-row :gutter="16">
+        <a-col :xs="24" :sm="12">
+          <a-form-item label="行动类型" required>
+            <a-select v-model:value="form.type">
+              <a-select-option v-for="type in types" :key="type.value" :value="type.value">{{ type.label }}</a-select-option>
+            </a-select>
+          </a-form-item>
+        </a-col>
+        <a-col :xs="24" :sm="12">
+          <a-form-item label="生效日期" required><a-date-picker v-model:value="form.date" value-format="YYYY-MM-DD" placeholder="选择生效日期" style="width: 100%" /></a-form-item>
+        </a-col>
+      </a-row>
+      <a-form-item label="币种">
+        <a-select v-model:value="form.currency">
+          <a-select-option value="CNY">CNY 人民币</a-select-option>
+          <a-select-option value="HKD">HKD 港币</a-select-option>
+          <a-select-option value="USD">USD 美元</a-select-option>
         </a-select>
       </a-form-item>
-      <a-form-item><a-date-picker v-model:value="form.date" value-format="YYYY-MM-DD" /></a-form-item>
-      <a-form-item>
-        <a-select v-model:value="form.currency" style="width: 80px">
-          <a-select-option value="CNY">CNY</a-select-option>
-          <a-select-option value="HKD">HKD</a-select-option>
-          <a-select-option value="USD">USD</a-select-option>
-        </a-select>
-      </a-form-item>
+      <a-row v-if="ratio" :gutter="16">
+        <a-col :span="12"><a-form-item :label="form.type === 'SPLIT' ? '拆分前股数' : '合并前股数'" required><a-input-number v-model:value="form.ratioDenominator" :min="0.000001" placeholder="例如：1" style="width: 100%" /></a-form-item></a-col>
+        <a-col :span="12"><a-form-item :label="form.type === 'SPLIT' ? '拆分后股数' : '合并后股数'" required><a-input-number v-model:value="form.ratioNumerator" :min="0.000001" placeholder="填写行动后股数" style="width: 100%" /></a-form-item></a-col>
+      </a-row>
+      <a-form-item v-if="quantity" label="增加股数" required><a-input-number v-model:value="form.quantityChange" :min="0.000001" placeholder="填写实际增加的股数" style="width: 100%" /></a-form-item>
+      <a-form-item v-if="cash" :label="form.type === 'CASH_DIVIDEND' ? '实际到账金额' : '配股现金支出'" required><a-input-number v-model:value="form.cashAmount" :min="0.01" :precision="2" placeholder="填写现金总额" style="width: 100%" /></a-form-item>
     </a-form>
-    <a-form layout="inline" :model="form" style="margin-bottom: 16px">
-      <a-form-item v-if="ratio"><a-input-number v-model:value="form.ratioDenominator" :min="0.000001" placeholder="拆分前" /></a-form-item>
-      <a-form-item v-if="ratio">:</a-form-item>
-      <a-form-item v-if="ratio"><a-input-number v-model:value="form.ratioNumerator" :min="0.000001" placeholder="拆分后" /></a-form-item>
-      <a-form-item v-if="quantity"><a-input-number v-model:value="form.quantityChange" :min="0.000001" placeholder="增加份额" /></a-form-item>
-      <a-form-item v-if="cash"><a-input-number v-model:value="form.cashAmount" :min="0.01" placeholder="金额/现金支出" /></a-form-item>
-      <a-form-item>
-        <a-button type="primary" :loading="saving" @click="save">{{ editingId ? '保存' : '新增' }}</a-button>
-        <a-button v-if="editingId" style="margin-left: 8px" @click="reset">取消</a-button>
-      </a-form-item>
-    </a-form>
-    <a-table :data-source="actions" :columns="columns" :loading="loading" :pagination="false" row-key="_id" size="small">
-      <template #bodyCell="{ column, record }">
-        <template v-if="column.key === 'date'">{{ String(record.date).slice(0, 10) }}</template>
-        <template v-else-if="column.key === 'type'">{{ label(record.type) }}</template>
-        <template v-else-if="column.key === 'detail'">{{ detail(record) }}</template>
-        <template v-else-if="column.key === 'operation'">
-          <a-button type="link" size="small" @click="edit(record)">编辑</a-button>
-          <a-popconfirm title="确定删除并自动重算统计？" @confirm="remove(record)">
-            <a-button type="link" danger size="small">删除</a-button>
-          </a-popconfirm>
-        </template>
-      </template>
-    </a-table>
   </a-modal>
 </template>
 
 <script setup>
 import { computed, onUnmounted, reactive, ref, watch } from 'vue';
 import { message } from 'ant-design-vue';
-import { createCorporateAction, deleteCorporateAction, getCorporateActions, searchStock, updateCorporateAction } from '@/api/index';
+import { createCorporateAction, searchStock } from '@/api/index';
 import { currencyForSymbol, toStockOptions } from '@/utils/corporateAction';
 
-const props = defineProps({ open: Boolean });
+const props = defineProps({ open: Boolean, initialStock: { type: Object, default: null } });
 const emit = defineEmits(['update:open', 'changed']);
-const loading = ref(false);
 const saving = ref(false);
-const actions = ref([]);
-const editingId = ref(null);
 const apiStockOptions = ref([]);
 let searchTimer = null;
 
@@ -82,14 +53,6 @@ const types = [
   { value: 'STOCK_DIVIDEND', label: '送股' },
   { value: 'BONUS_ISSUE', label: '转增' },
   { value: 'RIGHTS_ISSUE', label: '配股/供股' }
-];
-const columns = [
-  { title: '日期', key: 'date' },
-  { title: '证券', dataIndex: 'symbol' },
-  { title: '名称', dataIndex: 'name' },
-  { title: '类型', key: 'type' },
-  { title: '明细', key: 'detail' },
-  { title: '操作', key: 'operation' }
 ];
 const init = () => ({
   symbol: '', name: '', type: 'CASH_DIVIDEND', date: '', currency: 'CNY', cashAmount: null,
@@ -104,19 +67,14 @@ const allStockOptions = computed(() => {
   return [{ value: form.symbol, label: `${form.symbol} ${form.name}`, name: form.name, currency: form.currency }, ...apiStockOptions.value];
 });
 
-const load = async () => {
-  loading.value = true;
-  try {
-    actions.value = (await getCorporateActions()).list || [];
-  } catch {
-    message.error('读取公司行动失败，请稍后重试');
-  } finally {
-    loading.value = false;
-  }
-};
 const reset = () => {
   Object.assign(form, init());
-  editingId.value = null;
+  if (props.initialStock?.symbol) Object.assign(form, {
+    symbol: props.initialStock.symbol,
+    name: props.initialStock.name || props.initialStock.stockName || props.initialStock.symbol,
+    currency: props.initialStock.currency || currencyForSymbol(props.initialStock.symbol)
+  });
+
   apiStockOptions.value = [];
 };
 const doSearch = async (keyword) => {
@@ -148,11 +106,9 @@ const save = async () => {
   saving.value = true;
   try {
     const data = { ...form, cashAmount: Number(form.cashAmount || 0), quantityChange: Number(form.quantityChange || 0) };
-    if (editingId.value) await updateCorporateAction(editingId.value, data);
-    else await createCorporateAction(data);
+    await createCorporateAction(data);
     message.success('已保存并自动重算');
     reset();
-    await load();
     emit('changed');
   } catch (error) {
     message.error(error?.message || '保存失败，请稍后重试');
@@ -160,30 +116,11 @@ const save = async () => {
     saving.value = false;
   }
 };
-const edit = (record) => {
-  editingId.value = record._id;
-  Object.assign(form, { ...init(), ...record, date: String(record.date).slice(0, 10) });
-  apiStockOptions.value = [{ value: record.symbol, label: `${record.symbol} ${record.name}`, name: record.name, currency: record.currency }];
-};
-const remove = async (record) => {
-  try {
-    await deleteCorporateAction(record._id);
-    message.success('已删除并自动重算');
-    await load();
-    emit('changed');
-  } catch (error) {
-    message.error(error?.message || '删除失败，请稍后重试');
-  }
-};
-const label = (type) => types.find((item) => item.value === type)?.label || type;
-const ratioType = (type) => ['SPLIT', 'REVERSE_SPLIT'].includes(type);
-const detail = (action) => {
-  if (ratioType(action.type)) return `${action.ratioDenominator}:${action.ratioNumerator}`;
-  if (action.type === 'RIGHTS_ISSUE') return `+${action.quantityChange}，支出 ${action.cashAmount} ${action.currency}`;
-  if (action.type === 'CASH_DIVIDEND') return `${action.cashAmount} ${action.currency}`;
-  return `+${action.quantityChange}`;
-};
-
-watch(() => props.open, (visible) => { if (visible) load(); });
+watch(() => props.open, (visible) => { if (visible) reset(); });
 onUnmounted(() => clearTimeout(searchTimer));
 </script>
+
+<style scoped>
+.action-notice { margin-bottom: 20px; }
+.action-form :deep(.ant-form-item) { margin-bottom: 18px; }
+</style>

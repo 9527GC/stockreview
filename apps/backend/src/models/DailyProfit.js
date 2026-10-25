@@ -36,17 +36,12 @@ const dailyProfitSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  valuationQuality: { type: String, enum: ['complete', 'partial', 'stale'], default: 'partial' },
   // 当日总资产
   totalAssets: {
     type: Number,
     default: 0
   },
-  // 当日外部净资金流（锁定人民币金额）
-  externalNetFlow: { type: Number, default: 0 },
-  // 按日内剩余时间加权的外部资金流
-  weightedFlowCNY: { type: Number, default: 0 },
-  // 估值完整性：complete / stale / partial
-  valuationQuality: { type: String, enum: ['complete', 'stale', 'partial'], default: 'complete' },
   // 是否脏数据（需要重新计算）
   isDirty: {
     type: Boolean,

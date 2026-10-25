@@ -1,4 +1,4 @@
-const { valuatePortfolio } = require('../src/utils/portfolioValuation');
+const { valuatePortfolio } = require('../../src/utils/portfolioValuation');
 
 describe('valuatePortfolio', () => {
   test('使用当前有效实时价完成估值，而不是持仓成本', () => {

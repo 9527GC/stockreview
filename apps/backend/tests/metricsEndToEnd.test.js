@@ -109,7 +109,7 @@ describe('unified metrics end-to-end regression', () => {
     expect(emptySummary.body).toMatchObject({
       totalAssets: 0,
       totalDailyProfit: 0,
-      cashByCurrency: { CNY: 0, HKD: 0, USD: 0 }
+      cash: 0
     });
 
     const transfer = await createTransfer({
@@ -119,7 +119,7 @@ describe('unified metrics end-to-end regression', () => {
       date: `${OPEN_DATE}T09:00:00+08:00`,
       remark: 'initial funding'
     });
-    expect(transfer).toMatchObject({ fxRateToCNY: 1, amountCNY: 10000 });
+    expect(transfer).toMatchObject({ currency: 'CNY', amount: 10000 });
 
     const buy = await createTrade({
       symbol: '600519.SH',
@@ -139,8 +139,8 @@ describe('unified metrics end-to-end regression', () => {
       date: `${CLOSE_DATE}T10:00:00+08:00`,
       name: '贵州茅台'
     });
-    expect(buy.fxRateToCNY).toBe(1);
-    expect(sell.fxRateToCNY).toBe(1);
+    expect(buy.currency).toBe('CNY');
+    expect(sell.currency).toBe('CNY');
 
     const [profitSnapshot, revenueSnapshot] = await Promise.all([
       DailyProfit.findOne({ userId, date: CLOSE_DATE }).lean(),
@@ -149,14 +149,12 @@ describe('unified metrics end-to-end regression', () => {
     expect(profitSnapshot).toMatchObject({
       totalAssets: 11000,
       dailyProfitAmount: 1000,
-      dailyReturn: 10,
-      valuationQuality: 'complete'
+      dailyReturn: 10
     });
     expect(revenueSnapshot).toMatchObject({
       totalAssets: 11000,
       revenue: 1000,
-      returnRate: 10,
-      valuationQuality: 'complete'
+      returnRate: 10
     });
 
     const [summary, calendar, curve, history] = await Promise.all([
@@ -181,8 +179,7 @@ describe('unified metrics end-to-end regression', () => {
       totalAssets: 11000,
       totalDailyProfit: 1000,
       holdingsMarketValue: 0,
-      cashByCurrency: { CNY: 11000, HKD: 0, USD: 0 },
-      valuationQuality: 'complete'
+      cash: 11000
     });
     expect(summary.body.totalDailyProfit).toBe(revenueSnapshot.revenue);
     expect(calendar.body.dailyProfits[CLOSE_DATE]).toBe(revenueSnapshot.revenue);

@@ -5,18 +5,18 @@ const DailyRevenue = require('../models/DailyRevenue');
 const MonthlyStats = require('../models/MonthlyStats');
 const Snapshot = require('../models/Snapshot');
 const { Trade } = require('../models/Trade');
-const { CorporateAction } = require('../models/CorporateAction');
 const Transfer = require('../models/Transfer');
 const { Asset } = require('../models/Asset');
 const User = require('../models/User');
-const { getHistoricalIndexSeries } = require('../utils/marketData');
+const { getStockHistoricalQuotes } = require('../utils/historicalQuotes');
 const { getRates } = require('../utils/currency');
 const { parseDateInOffset } = require('../utils/datetime');
-const { calculateWeightedAveragePerformance } = require('../utils/cost');
+const { calculateDilutedPerformance } = require('../utils/cost');
 const { round2 } = require('../utils/pnl');
 const { normalizeSymbol } = require('../utils/symbol');
 const moment = require('moment');
 const { backfillDailyProfit } = require('../utils/dailyProfitBackfill');
+const { getDateStringInOffset } = require('../utils/datetime');
 
 /**
  * 收益曲线计算服务
@@ -30,13 +30,13 @@ class ProfitCurveScheduler {
 
   /**
    * 启动定时任务
-   * 默认每天凌晨 2:00 执行
+   * 北京时间每天 02:00、08:00 执行
    */
   start() {
     console.log('[Scheduler] Starting profit curve scheduler...');
     
-    // 每天凌晨 2:00 执行
-    const job = cron.schedule('0 2 * * *', async () => {
+    // 早晨再次执行，补偿海外收盘及行情延迟。
+    const job = cron.schedule('0 2,8 * * *', async () => {
       console.log('[Scheduler] Running daily profit curve calculation...');
       await this.calculateDailyProfit();
     }, {
@@ -45,10 +45,10 @@ class ProfitCurveScheduler {
     });
 
     this.jobs.push(job);
-    console.log('[Scheduler] Scheduled daily job at 02:00 CST');
+    console.log('[Scheduler] Scheduled daily jobs at 02:00 and 08:00 CST');
 
-    //  also run immediately on startup if needed
-    // this.calculateDailyProfit();
+    // 重启后立即恢复漏算日期，不必等待下一个定时任务。
+    void this.calculateDailyProfit();
   }
 
   /**
@@ -75,7 +75,7 @@ class ProfitCurveScheduler {
 
     try {
       // 获取前一天日期
-      const yesterday = moment().subtract(1, 'days').format('YYYY-MM-DD');
+      const yesterday = moment.utc(getDateStringInOffset(480)).subtract(1, 'days').format('YYYY-MM-DD');
       console.log(`[Scheduler] Calculating profit for ${yesterday}`);
 
       // 1. 获取上证指数数据
@@ -88,10 +88,12 @@ class ProfitCurveScheduler {
       // 3. 为每个用户计算收益数据
       for (const user of users) {
         try {
-          // Rebuild from the ledger so historical total assets use each day's
-          // trades, transfers, and quotes. The legacy calculator uses the
-          // current asset snapshot for every date and can create false spikes.
-          await backfillDailyProfit(user._id, yesterday);
+          // 滚动重算近两周，补偿行情延迟；长期停机时从最后记录接续恢复。
+          const recentStart = moment.utc(yesterday).subtract(13, 'days').format('YYYY-MM-DD');
+          const latest = await DailyProfit.findOne({ userId: user._id, date: { $lte: yesterday } })
+            .sort({ date: -1 }).select('date').lean();
+          const repairStart = latest?.date && latest.date < recentStart ? latest.date : recentStart;
+          await backfillDailyProfit(user._id, repairStart);
         } catch (error) {
           console.error(`[Scheduler] Error calculating profit for user ${user._id}:`, error.message);
         }
@@ -129,23 +131,17 @@ class ProfitCurveScheduler {
 
       // 获取历史数据
       const startDate = moment(date).subtract(5, 'days').format('YYYY-MM-DD');
-      const benchmarkData = await getHistoricalIndexSeries({
-        code: 'zs_000001',
-        name: '上证指数',
-        symbol: '000001.SH',
-        startDate,
-        endDate: date
-      });
+      const benchmarkData = await getStockHistoricalQuotes('000001.SH', startDate, date);
 
       if (benchmarkData && benchmarkData.length > 0) {
-        // 找到对应日期的数据（返回字段为 snapshotTime / index / price）
+        // 使用历史行情接口的实际日期和收盘价字段。
         const dayData = benchmarkData.find(d => {
-          const dStr = String(d.snapshotTime || '').slice(0, 10);
+          const dStr = String(d.date || '').slice(0, 10);
           return dStr === date;
         });
 
         if (dayData) {
-          const close = Number(dayData.index ?? dayData.price);
+          const close = Number(dayData.close);
           const open = Number(dayData.open ?? close);
           const high = Number(dayData.high ?? close);
           const low = Number(dayData.low ?? close);
@@ -419,12 +415,9 @@ class ProfitCurveScheduler {
         if (!asset) continue;
 
         // 获取持仓详情
-        const [trades, actions] = await Promise.all([
-          Trade.find({ userId: user._id }),
-          CorporateAction.find({ userId: user._id })
-        ]);
+        const trades = await Trade.find({ userId: user._id, date: { $lt: parseDateInOffset(date, 480) } });
         const rates = await getRates();
-        const perfMap = calculateWeightedAveragePerformance({ trades, actions, rates });
+        const perfMap = calculateDilutedPerformance({ trades, rates });
         const holdings = [];
 
         perfMap.forEach((perf, symbol) => {

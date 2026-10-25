@@ -60,7 +60,7 @@ const fetchSohuHistoricalQuotes = async (symbol, startDate, endDate) => {
   }
 
   const url = `${SOHU_HISTORY_API_URL}${sohuCode}&start=${startCompact}&end=${endCompact}`;
-  const payload = await fetchJson(url);
+  const payload = await fetchJson(url, { timeout: 10000 });
 
   if (!Array.isArray(payload) || !payload[0]?.hq) {
     return [];
@@ -90,7 +90,7 @@ const fetchTencentHistoricalQuotes = async (symbol, startDate, endDate) => {
   // 腾讯非复权 K 线，字段顺序：date, open, close, high, low, volume
   const url = `${TENCENT_HISTORY_API_URL}${tencentCode},day,${startStr},${endStr},500`;
 
-  const payload = await fetchJson(url);
+  const payload = await fetchJson(url, { timeout: 10000 });
   const rows = payload?.data?.[tencentCode]?.day || [];
 
   return rows.map((row) => ({
@@ -114,7 +114,7 @@ const fetchEastmoneyHistoricalQuotes = async (symbol, startDate, endDate) => {
 
   const url = `${EASTMONEY_HISTORY_API_URL}?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=0&beg=${startCompact}&end=${endCompact}`;
 
-  const payload = await fetchJson(url);
+  const payload = await fetchJson(url, { timeout: 10000 });
   const klines = payload?.data?.klines || [];
   if (klines.length === 0) return [];
 

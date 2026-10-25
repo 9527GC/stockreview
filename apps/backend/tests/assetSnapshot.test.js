@@ -48,7 +48,7 @@ afterAll(async () => {
 });
 
 describe('refreshAssetMarketValue', () => {
-  test('从账本重建现金，并写入估值与行情质量', async () => {
+  test('保留现有现金并按实时行情更新资产，缓存前收盘价', async () => {
     await Transfer.create({
       userId,
       type: 'IN',
@@ -80,6 +80,7 @@ describe('refreshAssetMarketValue', () => {
       avgCost: 50,
       currency: 'CNY'
     });
+    await Asset.create({ userId, cash: 900, currentPrincipal: 1000 });
     getQuotes.mockResolvedValue({
       '600519.SH': {
         symbol: '600519.SH',
@@ -94,16 +95,13 @@ describe('refreshAssetMarketValue', () => {
     const asset = await refreshAssetMarketValue(userId);
     const holding = await Holding.findOne({ userId }).lean();
 
-    expect({ ...asset.toObject(), cashBalances: Object.fromEntries(asset.cashBalances) }).toMatchObject({
-      cashBalances: { CNY: 900, HKD: 0, USD: 0 },
+    expect(asset.toObject()).toMatchObject({
       cash: 900,
       holdingsMarketValue: 100,
-      totalAssets: 1000,
-      valuationQuality: 'complete'
+      totalAssets: 1000
     });
     expect(holding).toMatchObject({
-      lastPrice: 45,
-      lastPriceDate: '2026-09-18'
+      lastPrice: 46
     });
   });
 });

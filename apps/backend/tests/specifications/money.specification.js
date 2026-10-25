@@ -3,7 +3,7 @@ const {
   toCNY,
   normalizeCashBalances,
   sumCashBalancesCNY
-} = require('../src/utils/money');
+} = require('../../src/utils/money');
 
 test('金额和人民币换算统一保留两位小数', () => {
   expect(toMoney(12.345)).toBe(12.35);
